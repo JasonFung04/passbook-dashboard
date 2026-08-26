@@ -5,9 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Passbook</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      #passbook-signout { position: fixed; right: 16px; bottom: 16px; z-index: 9999; display: none; border: 1px solid #CBD6CD; border-radius: 4px; padding: 9px 12px; background: #FBFCFA; color: #15241E; box-shadow: 0 4px 16px rgba(21,36,30,.16); font: 700 12px ui-sans-serif,system-ui,sans-serif; cursor: pointer; }
+      #passbook-signout:hover { background: #F5DEDE; color: #A5202C; border-color: #A5202C; }
+    </style>
   </head>
   <body>
     <div id="root"></div>
+    <button id="passbook-signout" type="button">登出 / Sign out</button>
     <script type="module" src="/src/main.jsx"></script>
+    <script type="module">
+      import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+      const client = createClient("https://kojswhijtpirxaigcwuo.supabase.co", "sb_publishable_T3wnT2GdTs0_oxbxhKClmg_hJg3X6mn");
+      const button = document.getElementById("passbook-signout");
+      const render = () => { button.style.display = document.querySelector(".pb-root") ? "block" : "none"; };
+      new MutationObserver(render).observe(document.getElementById("root"), { childList: true, subtree: true });
+      button.addEventListener("click", async () => { await client.auth.signOut(); location.reload(); });
+    </script>
   </body>
 </html>
