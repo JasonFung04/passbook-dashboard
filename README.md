@@ -51,6 +51,7 @@ Every user-visible feature, interface, deployment, or security change must updat
 - Added Vercel Production deployment from the `main` branch.
 - Added a Traditional Chinese / English UI switch and a mobile sign-out control.
 - Positioned the language switch at the top centre with reserved header space to avoid obscuring page content.
+- Added a date-safety guard so temporarily blank or invalid time-deposit dates do not crash the dashboard.
 
 ## Security notes
 
