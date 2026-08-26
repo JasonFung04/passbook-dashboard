@@ -6,21 +6,26 @@
     <title>Passbook</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-      #passbook-signout { position: fixed; right: 16px; bottom: 16px; z-index: 9999; display: none; border: 1px solid #CBD6CD; border-radius: 4px; padding: 9px 12px; background: #FBFCFA; color: #15241E; box-shadow: 0 4px 16px rgba(21,36,30,.16); font: 700 12px ui-sans-serif,system-ui,sans-serif; cursor: pointer; }
-      #passbook-signout:hover { background: #F5DEDE; color: #A5202C; border-color: #A5202C; }
+      #passbook-signout,#passbook-language{position:fixed;z-index:9999;border:1px solid #CBD6CD;border-radius:4px;padding:9px 12px;background:#FBFCFA;color:#15241E;box-shadow:0 4px 16px rgba(21,36,30,.16);font:700 12px ui-sans-serif,system-ui,sans-serif;cursor:pointer}#passbook-signout{right:16px;bottom:16px;display:none}#passbook-language{left:16px;top:16px}#passbook-signout:hover,#passbook-language:hover{background:#DCEAE2;color:#0F7A5A;border-color:#0F7A5A}
     </style>
   </head>
   <body>
     <div id="root"></div>
+    <button id="passbook-language" type="button">English</button>
     <button id="passbook-signout" type="button">登出 / Sign out</button>
     <script type="module" src="/src/main.jsx"></script>
     <script type="module">
       import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-      const client = createClient("https://kojswhijtpirxaigcwuo.supabase.co", "sb_publishable_T3wnT2GdTs0_oxbxhKClmg_hJg3X6mn");
-      const button = document.getElementById("passbook-signout");
-      const render = () => { button.style.display = document.querySelector(".pb-root") ? "block" : "none"; };
-      new MutationObserver(render).observe(document.getElementById("root"), { childList: true, subtree: true });
-      button.addEventListener("click", async () => { await client.auth.signOut(); location.reload(); });
+      const client=createClient("https://kojswhijtpirxaigcwuo.supabase.co","sb_publishable_T3wnT2GdTs0_oxbxhKClmg_hJg3X6mn");
+      const languageButton=document.getElementById("passbook-language"),signoutButton=document.getElementById("passbook-signout");
+      const zh={"Overview":"總覽","Grow":"成長","Deposits":"定存","Month":"月度","Plan":"計劃","Goals":"目標","Money · Deposits · P&L · Growth":"資金 · 定存 · 損益 · 成長","net worth":"淨資產","On deposit":"定存總額","Blended yield":"平均年利率","Invested":"投資金額","Kept per month":"每月儲蓄","Goal funding":"目標資金","Savings line":"儲蓄趨勢","What to do next":"下一步建議","Log an entry":"記錄交易","Next manual re-deposit":"下一筆手動續存","days left":"日後到期","days idle":"日閒置","Maturity ladder · next 12 months":"未來 12 個月到期階梯","Maturing in 30 days":"30 日內到期","Add a deposit":"新增定存","Closed":"已結束","Interest this term":"本期利息","Bank renews":"銀行自動續存","Duplicate":"複製","Close":"結束","Reopen":"重新開啟","Delete":"刪除","Ledger":"收支流水","Add an entry":"新增交易","Spent":"支出","Set aside":"儲蓄","Extra money in":"額外收入","Category":"類別","Amount":"金額","Balance":"結餘","Plan against actual":"預算與實際比較","Money in each month":"每月收入","Living":"生活","People & learning":"人際與學習","Savings":"儲蓄","Does the plan balance?":"計劃是否平衡？","Money in":"收入","Spending":"支出","Left over":"餘額","Saved":"已儲存","Not saved — storage unavailable":"未能儲存 — 儲存服務不可用","Saved on this device only. Rules of thumb, not licensed advice.":"資料會同步到你的雲端帳戶。以下內容僅供參考，並非持牌建議。","Reset":"重設","Add income":"新增收入","Add line":"新增項目","Remove goal":"移除目標","All goals together":"所有目標合計","Opening passbook…":"正在開啟 Passbook…","matured":"已到期","auto":"自動續存","due":"即將到期","running":"進行中"};
+      const en=Object.fromEntries(Object.entries(zh).map(([a,b])=>[b,a]));
+      let language=localStorage.getItem("passbook-language")||"zh";
+      const walk=()=>{const map=language==="zh"?zh:en;const walker=document.createTreeWalker(document.getElementById("root"),NodeFilter.SHOW_TEXT);let node;while(node=walker.nextNode()){const key=node.nodeValue.trim();if(map[key])node.nodeValue=node.nodeValue.replace(key,map[key]);}document.documentElement.lang=language==="zh"?"zh-Hant":"en";languageButton.textContent=language==="zh"?"English":"繁中";signoutButton.style.display=document.querySelector(".pb-root")?"block":"none";};
+      new MutationObserver(walk).observe(document.getElementById("root"),{childList:true,subtree:true,characterData:true});
+      languageButton.addEventListener("click",()=>{language=language==="zh"?"en":"zh";localStorage.setItem("passbook-language",language);location.reload();});
+      signoutButton.addEventListener("click",async()=>{await client.auth.signOut();location.reload();});
+      setTimeout(walk,300);
     </script>
   </body>
 </html>
