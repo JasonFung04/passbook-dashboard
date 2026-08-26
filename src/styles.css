@@ -12,3 +12,5 @@ body { background: #EAEFE9; }
 .auth-card button { border: 0; border-radius: 3px; padding: 10px; background: #0F7A5A; color: white; cursor: pointer; font-weight: 800; }
 .auth-card .switch { padding: 4px 0; background: transparent; color: #0F7A5A; }
 .auth-card em { display: block; color: #A5202C; font-size: 12px; font-style: normal; line-height: 1.5; }
+.pb-root > header { padding-top: 48px !important; }
+#passbook-language { left: 50% !important; top: 10px !important; transform: translateX(-50%); }

@@ -39,6 +39,19 @@ Open the local URL shown by Vite.
 
 Push changes to the `main` branch. Vercel is connected to this repository and automatically creates a Production deployment.
 
+## Changelog
+
+### Update policy
+
+Every user-visible feature, interface, deployment, or security change must update this README with its relevant feature note or changelog entry.
+
+### Current
+
+- Added Supabase email authentication and cloud-synced personal data.
+- Added Vercel Production deployment from the `main` branch.
+- Added a Traditional Chinese / English UI switch and a mobile sign-out control.
+- Positioned the language switch at the top centre with reserved header space to avoid obscuring page content.
+
 ## Security notes
 
 - Never commit a Supabase `service_role` key, database password, or personal access token.
