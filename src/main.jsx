@@ -16,6 +16,7 @@ const normalise = (state) => {
   return state;
 };
 
+globalThis.React = React;
 globalThis.fx = 7.8;
 window.storage = {
   async get() {
