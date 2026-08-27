@@ -470,7 +470,7 @@ function Grow({ st, d, up, lang }) {
     },
     {
       t: L("Blended yield"), s: d.blended >= 3 ? "good" : d.blended >= 2.5 ? "watch" : "act", v: `${d.blended.toFixed(2)}%`,
-      l: tr(`香港短期港元定存一般在 2–3% 之間，美元定存通常更高，虛擬銀行的優惠利率多數貼近上限——實際數字會隨市況浮動，續存前值得貨比三家。以你目前 ${s.inflation}% 的通脹假設計算，你的實質回報是 ${(d.blended - n(s.inflation)).toFixed(2)}%。`, `Short-dated HKD deposits in Hong Kong typically run 2–3%, USD terms usually pay more, and virtual banks tend to sit near the top of that range — actual rates move with the market, so it's worth comparing offers before each renewal. At your ${s.inflation}% inflation assumption, your current real return is ${(d.blended - n(s.inflation)).toFixed(2)}%.`),
+      l: tr(`這是你目前所有定存按金額加權的平均年利率。以你設定的 ${s.inflation}% 通脹假設計算，你的實質回報是 ${(d.blended - n(s.inflation)).toFixed(2)}%——Passbook 沒有接入即時市場利率，續存前請自行比較銀行公佈的最新牌價，不要以這裡的數字為準。`, `This is the amount-weighted average rate across your current deposits. At your ${s.inflation}% inflation assumption, your real return is ${(d.blended - n(s.inflation)).toFixed(2)}% — Passbook has no live market-rate feed, so compare actual published bank rates yourself before renewing rather than relying on this figure.`),
     },
     {
       t: L("Currency mix"), s: cnyPct > 40 ? "act" : cnyPct > 15 ? "watch" : "good", v: tr(`${usdPct.toFixed(0)}% 美元 · ${cnyPct.toFixed(0)}% 人民幣`, `${usdPct.toFixed(0)}% USD · ${cnyPct.toFixed(0)}% CNY`),
@@ -481,7 +481,7 @@ function Grow({ st, d, up, lang }) {
     {
       t: L("Per-bank exposure"), s: biggestBank && biggestBank.hkd > 800000 ? "act" : "good",
       v: biggestBank ? `HK$${money(biggestBank.hkd)}` : "—",
-      l: tr(`存款保障計劃每個存戶每間銀行保障 HK$800,000（港元或外幣），定存年期五年內適用。你最大的一間是 ${biggestBank ? biggestBank.bank : "—"}——目前仍在保障範圍內。結構性或掛鈎存款不受保障，應避免。`, `Deposit protection covers HK$800,000 per depositor per bank, HKD or foreign currency, on time deposits up to five years. Your largest is ${biggestBank ? biggestBank.bank : "—"} — comfortably inside. Structured or currency-linked deposits are not covered, so avoid them.`),
+      l: tr(`存款保障計劃過去保障每個存戶每間銀行 HK$800,000（港元或外幣），定存年期五年內適用——保障金額由計劃公佈，並非即時數據，請以官方公告為準。你最大的一間是 ${biggestBank ? biggestBank.bank : "—"}——按此金額計算目前仍在保障範圍內。結構性或掛鈎存款不受保障，應避免。`, `The Deposit Protection Scheme has covered up to HK$800,000 per depositor per bank, HKD or foreign currency, on time deposits up to five years — this is a published scheme limit, not live data, so confirm the current figure officially. Your largest is ${biggestBank ? biggestBank.bank : "—"} — comfortably inside at that limit. Structured or currency-linked deposits are not covered, so avoid them.`),
     },
     {
       t: L("Money that compounds"), s: n(st.portfolio.value) > 0 ? "good" : "act",
@@ -539,7 +539,7 @@ function Grow({ st, d, up, lang }) {
         ? tr(`三年內到期的目標還差 HK$${money(near3yShort)}，但你的定存總額只有 HK$${money(d.depHKD)}，不夠完全覆蓋。旅行、父母的手機、駕駛牌照——把定存年期對準用錢的日子，例如選一筆在付款前一星期到期的 6 個月定存。`, `Goals due within 3 years still need HK$${money(near3yShort)}, but your total deposits are only HK$${money(d.depHKD)} — not quite enough to cover them. Travel, parents' phone, the driving licence — match the term to the date you need it, a 6-month deposit maturing the week before you pay.`)
         : tr("三年內到期的目標，目前定存總額足以覆蓋。繼續把年期對準用錢的日子，例如選一筆在付款前一星期到期的 6 個月定存，而不是之後才到期。", "Your total deposits currently cover what's needed for goals due within 3 years. Keep matching the term to the date you need it — a 6-month deposit maturing the week before you pay, not the week after.") },
     { n: 5, t: tr("之後所有錢，每月定投一隻環球指數基金", "Everything after that buys a global index fund, monthly"), amt: monthlySave, done: n(st.portfolio.value) > 0,
-      l: tr("每月同一天、同一金額，不擇時。香港對資本增值和股息都不徵稅，所以一隻純累積型的環球追蹤基金已經足夠簡單。愛爾蘭註冊的 UCITS 基金只需付 15% 美股股息預扣稅（而非 30%），也能避開美股持倉的美國遺產稅風險。", "Same day each month, same amount, no timing. Hong Kong charges no tax on capital gains or dividends, so a plain accumulating world tracker is about as simple as it gets. An Irish-domiciled UCITS fund faces 15% US dividend withholding instead of 30%, and keeps you clear of US estate-tax exposure on US-listed holdings.") },
+      l: tr("每月同一天、同一金額，不擇時。以現行規則，香港不徵資本增值或股息稅，愛爾蘭註冊的 UCITS 基金一般適用 15% 美股股息預扣稅（而非 30%），也有助避開美股持倉的美國遺產稅風險——稅務規則會隨時間或個人情況變動，Passbook 沒有替你核實，投資前請自行確認最新規則或諮詢專業意見。", "Same day each month, same amount, no timing. Under current rules, Hong Kong charges no tax on capital gains or dividends, and an Irish-domiciled UCITS fund generally sees 15% US dividend withholding instead of 30%, which also helps avoid US estate-tax exposure on US-listed holdings — tax rules change over time and by individual circumstance, and Passbook hasn't verified any of this for you, so confirm the current rules yourself or get professional advice before investing.") },
     { n: 6, t: tr("然後專注提升收入，而非追逐利率", "Then push income, not yield"), amt: null, done: false,
       l: tr(`以你目前的餘額，多 1% 利率只值 HK$${money(d.depHKD * 0.01)} 一年，而加薪 10% 是 HK$${money(d.income * 12 * 0.1)}。把時間花在後者——這正是「書籍」和「課程」這兩項預算存在的原因。`, `At your balance +1% of yield is HK$${money(d.depHKD * 0.01)} a year. A 10% raise is HK$${money(d.income * 12 * 0.1)}. Spend your evenings on the second one — that's what the books and courses line is for.`) },
   ];
@@ -627,7 +627,7 @@ function Grow({ st, d, up, lang }) {
         </div>
         <input className="pb-in mt-2" style={{ width: "100%", fontSize: 12 }} placeholder={L("What you hold, and where")} value={st.portfolio.note || ""} onChange={(e) => up((x) => { x.portfolio.note = e.target.value; })} />
         <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 8, lineHeight: 1.5 }}>
-          {tr("一隻廣泛、低成本、累積型的環球基金，對第一個投資組合已經足夠；再加更多基金大多只增加成本，分散效果有限。以你的收入水平有兩件事可以跳過：為了扣稅而把錢鎖進強積金自願供款或年金——以年薪約 HK$216,000 計，你落在最低稅階，扣稅能省的很少，但資金被鎖住是真實的代價；以及任何結構性或掛鈎存款，這些不受存款保障計劃保障。", "One broad, cheap, accumulating world fund is enough for a first portfolio; extra funds mostly add cost, not diversification. Two things to skip at your income: locking money into a tax-deductible MPF top-up or an annuity for the salaries-tax break — on roughly HK$216,000 a year you sit in the lowest band, so the deduction saves you very little while the lock-up is real; and any structured or currency-linked deposit, which is not covered by deposit protection.")}
+          {tr("一隻廣泛、低成本、累積型的環球基金，對第一個投資組合已經足夠；再加更多基金大多只增加成本，分散效果有限。要不要為了扣稅而把錢鎖進強積金自願供款或年金，取決於你實際落在哪個稅階——Passbook 沒有你的報稅資料，無法替你核實，請自行對照稅務局最新的薪俸稅稅階，稅階越低，扣稅能省的通常越少，但資金被鎖住是確定的代價。任何結構性或掛鈎存款則不受存款保障計劃保障，應避免。", "One broad, cheap, accumulating world fund is enough for a first portfolio; extra funds mostly add cost, not diversification. Whether a tax-deductible MPF top-up or annuity is worth it depends on which tax band you actually sit in — Passbook doesn't have your tax filing details and can't verify this for you, so check the current salaries-tax bands yourself; the lower your band, the less the deduction typically saves, while the lock-up is certain either way. Any structured or currency-linked deposit isn't covered by deposit protection, so avoid those.")}
         </div>
       </Card>
 
