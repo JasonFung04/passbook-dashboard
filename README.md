@@ -60,6 +60,8 @@ Every user-visible feature, interface, deployment, or security change must updat
 - Switched the JSX build to `@vitejs/plugin-react`'s automatic runtime, removing the `globalThis.React` workaround that had been needed because Vite's default classic JSX transform requires `React` in scope.
 - Replaced the Tailwind CDN script (not recommended for production — no purge, runtime JIT compile) with a small local utility stylesheet covering only the classes the app actually uses.
 - Consolidated the Supabase project URL/key into a single `src/supabaseClient.js` instead of duplicating them across `index.html` and `src/main.jsx`.
+- Fixed several spots (header net worth, deposit rows, next-renewal card) where a long bank name or a large HKD figure could squeeze a currency amount off-screen; amounts now always stay fully visible, with long labels truncating or wrapping instead.
+- Made the "Currency mix" check on the Grow tab reflect real CNY exposure instead of always showing "good", and replaced the yield commentary's fixed calendar-date market snapshot with evergreen guidance so it doesn't read as stale over time — the personalized numbers (blended yield, real return, savings rate, etc.) already recalculate live from your data.
 
 ## Security notes
 

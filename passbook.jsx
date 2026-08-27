@@ -130,9 +130,12 @@ async function persist(state) {
 }
 
 /* ── atoms ───────────────────────────────────────────────────── */
-function Num({ value, size = 15, weight = 600, color = C.ink, prefix = "" }) {
+function Num({ value, size = 15, weight = 600, color = C.ink, prefix = "", wrap = false }) {
   return (
-    <span style={{ fontFamily: MONO, fontSize: size, fontWeight: weight, color, fontVariantNumeric: "tabular-nums", letterSpacing: "-0.02em", whiteSpace: "nowrap" }}>
+    <span style={{
+      fontFamily: MONO, fontSize: size, fontWeight: weight, color, fontVariantNumeric: "tabular-nums", letterSpacing: "-0.02em",
+      whiteSpace: wrap ? "normal" : "nowrap", overflowWrap: wrap ? "anywhere" : "normal",
+    }}>
       {prefix}{value}
     </span>
   );
@@ -283,17 +286,19 @@ export default function Passbook({ lang = "zh", onSignOut }) {
         .pb-row{border-bottom:1px solid ${C.rule}}
         .pb-scroll::-webkit-scrollbar{height:6px}
         .pb-scroll::-webkit-scrollbar-thumb{background:${C.rule};border-radius:3px}
+        .pb-ellipsis{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+        .pb-shrink0{flex-shrink:0}
         @media (prefers-reduced-motion:reduce){.pb-root *{transition:none!important}}
       `}</style>
 
       <header style={{ background: C.ink, color: "#EAEFE9", padding: "16px 16px 0" }}>
         <div className="flex items-baseline justify-between gap-3">
-          <div>
-            <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.03em" }}>{L("Passbook")}</div>
-            <div style={{ fontSize: 11, color: "#8CA79B", letterSpacing: ".1em", textTransform: "uppercase", fontWeight: 700 }}>{L("Money · Deposits · P&L · Growth")}</div>
+          <div className="pb-ellipsis" style={{ flex: "1 1 auto" }}>
+            <div className="pb-ellipsis" style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.03em" }}>{L("Passbook")}</div>
+            <div className="pb-ellipsis" style={{ fontSize: 11, color: "#8CA79B", letterSpacing: ".1em", textTransform: "uppercase", fontWeight: 700 }}>{L("Money · Deposits · P&L · Growth")}</div>
           </div>
-          <div className="text-right">
-            <Num value={money(d.netWorth)} prefix="HK$" size={19} weight={800} color="#7FD8AE" />
+          <div className="text-right pb-shrink0">
+            <Num value={money(d.netWorth)} prefix="HK$" size={19} weight={800} color="#7FD8AE" wrap />
             <div style={{ fontFamily: MONO, fontSize: 10.5, color: flash ? "#7FD8AE" : "#67827A" }}>{flash || L("net worth")}</div>
             {onSignOut && (
               <button onClick={onSignOut} className="pb-tab" style={{ marginTop: 6, background: "transparent", border: `1px solid #3C554C`, color: "#9FB6AC", borderRadius: 3, padding: "3px 8px", fontSize: 10.5, fontWeight: 700, cursor: "pointer" }}>
@@ -334,7 +339,7 @@ function Stat({ label, v, accent, sub, prefix = "HK$" }) {
   return (
     <Card accent={accent} pad="p-3">
       <Eyebrow>{label}</Eyebrow>
-      <div className="mt-1"><Num value={money(v)} prefix={prefix} size={18} weight={800} color={accent === C.ink2 ? C.ink : accent} /></div>
+      <div className="mt-1"><Num value={money(v)} prefix={prefix} size={18} weight={800} color={accent === C.ink2 ? C.ink : accent} wrap /></div>
       {sub && <div style={{ fontSize: 11, color: C.ink2, marginTop: 2 }}>{sub}</div>}
     </Card>
   );
@@ -362,14 +367,14 @@ function Overview({ st, d, go, lang }) {
       {nm && (
         <Card accent={nm.i.status === "running" ? C.gold : C.red}>
           <div className="flex items-start justify-between gap-3">
-            <div>
+            <div style={{ minWidth: 0 }}>
               <Eyebrow color={nm.i.status === "running" ? C.gold : C.red}>{L("Next manual re-deposit")}</Eyebrow>
-              <div className="mt-1" style={{ fontSize: 16, fontWeight: 800 }}>{nm.bank} · {nm.product} · {nm.ccy}</div>
-              <div style={{ fontSize: 12.5, color: C.ink2, marginTop: 2 }}>
+              <div className="mt-1" style={{ fontSize: 16, fontWeight: 800, overflowWrap: "anywhere" }}>{nm.bank} · {nm.product} · {nm.ccy}</div>
+              <div style={{ fontSize: 12.5, color: C.ink2, marginTop: 2, overflowWrap: "anywhere" }}>
                 {fmtDate(nm.i.maturity, lang)} · {ccySign(nm.ccy)}{money(nm.i.atMaturity, 2)} {tr("到期歸還", "comes back")}
               </div>
             </div>
-            <div className="text-right">
+            <div className="text-right pb-shrink0">
               <Num value={Math.abs(nm.i.left) || 0} size={30} weight={800} color={nm.i.left <= 0 ? C.red : C.gold} />
               <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: C.ink2 }}>{nm.i.left <= 0 ? L("days idle") : L("days left")}</div>
             </div>
@@ -465,11 +470,13 @@ function Grow({ st, d, up, lang }) {
     },
     {
       t: L("Blended yield"), s: d.blended >= 3 ? "good" : d.blended >= 2.5 ? "watch" : "act", v: `${d.blended.toFixed(2)}%`,
-      l: tr(`2026 年 8 月中的香港：3 個月 HKD 定存在發鈔銀行約 2.4%，靈活一點的銀行約 2.8–2.9%，虛擬銀行約 3%；美元定存利率更高。扣除 ${s.inflation}% 通脹後，你的實質回報是 ${(d.blended - n(s.inflation)).toFixed(2)}%。`, `Mid-August 2026 in HK: 3-month HKD sits near 2.4% at the note-issuing banks and closer to 2.8–2.9% at the sharper ones, with virtual banks around 3%. USD terms pay more. After ${s.inflation}% inflation your real return is ${(d.blended - n(s.inflation)).toFixed(2)}%.`),
+      l: tr(`香港短期港元定存一般在 2–3% 之間，美元定存通常更高，虛擬銀行的優惠利率多數貼近上限——實際數字會隨市況浮動，續存前值得貨比三家。以你目前 ${s.inflation}% 的通脹假設計算，你的實質回報是 ${(d.blended - n(s.inflation)).toFixed(2)}%。`, `Short-dated HKD deposits in Hong Kong typically run 2–3%, USD terms usually pay more, and virtual banks tend to sit near the top of that range — actual rates move with the market, so it's worth comparing offers before each renewal. At your ${s.inflation}% inflation assumption, your current real return is ${(d.blended - n(s.inflation)).toFixed(2)}%.`),
     },
     {
-      t: L("Currency mix"), s: "good", v: tr(`${usdPct.toFixed(0)}% 美元 · ${cnyPct.toFixed(0)}% 人民幣`, `${usdPct.toFixed(0)}% USD · ${cnyPct.toFixed(0)}% CNY`),
-      l: tr("港元與美元掛鈎在 7.75–7.85 區間，所以美元定存對你幾乎沒有匯率風險，但換匯價差會吃掉小額資金多賺的利息——只在存 6 個月或以上時才換幣，不要來回换。人民幣沒有這種掛鈎，在岸／離岸（CNH）匯價本身會波動，加上個人購匯額度限制，實際的匯率與流動性風險比美元大得多，換匯前要留意。", "The HKD is pegged in a 7.75–7.85 band, so USD deposits carry little FX risk for you. But the conversion spread eats much of the extra yield on small sums — only switch currency for 6-month terms or longer, and don't convert back and forth. CNY has no such peg: onshore/offshore (CNH) rates move on their own, and personal conversion quotas apply, so it carries real FX and liquidity risk that USD does not."),
+      t: L("Currency mix"), s: cnyPct > 40 ? "act" : cnyPct > 15 ? "watch" : "good", v: tr(`${usdPct.toFixed(0)}% 美元 · ${cnyPct.toFixed(0)}% 人民幣`, `${usdPct.toFixed(0)}% USD · ${cnyPct.toFixed(0)}% CNY`),
+      l: cnyPct > 15
+        ? tr(`人民幣定存目前佔你定存總額的 ${cnyPct.toFixed(0)}%。人民幣沒有像港元兌美元那樣的掛鈎，在岸／離岸（CNH）匯價會自行波動，加上個人購匯額度限制，實際的匯率與流動性風險比美元大得多——${cnyPct > 40 ? "目前佔比偏高，值得評估是否要收窄。" : "留意額度與匯價，避免佔比再擴大。"}`, `CNY deposits are currently ${cnyPct.toFixed(0)}% of your total. Unlike the HKD/USD peg, CNY has no such anchor: onshore/offshore (CNH) rates move on their own, and personal conversion quotas apply, so it carries real FX and liquidity risk — ${cnyPct > 40 ? "worth reassessing whether this concentration is intentional." : "keep an eye on quotas and rates so it doesn't grow further."}`)
+        : tr("港元與美元掛鈎在 7.75–7.85 區間，所以美元定存對你幾乎沒有匯率風險，但換匯價差會吃掉小額資金多賺的利息——只在存 6 個月或以上時才換幣，不要來回換。人民幣沒有這種掛鈎，往後若增持要留意在岸／離岸匯價波動與個人購匯額度。", "The HKD is pegged in a 7.75–7.85 band, so USD deposits carry little FX risk for you. But the conversion spread eats much of the extra yield on small sums — only switch currency for 6-month terms or longer, and don't convert back and forth. CNY has no such peg, so watch onshore/offshore rates and personal conversion quotas if you add more."),
     },
     {
       t: L("Per-bank exposure"), s: biggestBank && biggestBank.hkd > 800000 ? "act" : "good",
@@ -723,14 +730,14 @@ function Deposits({ st, d, up, lang }) {
               <button onClick={() => setOpen(isOpen ? null : x.id)} className="pb-tab"
                 style={{ width: "100%", background: "none", border: "none", padding: "10px 12px", textAlign: "left", cursor: "pointer" }}>
                 <div className="flex justify-between items-baseline gap-2">
-                  <span style={{ fontWeight: 700, fontSize: 13.5 }}>{x.bank} <span style={{ color: C.ink2, fontWeight: 500 }}>{x.product}</span></span>
-                  <Num value={`${ccySign(x.ccy)}${money(x.principal)}`} size={13.5} weight={800} />
+                  <span className="pb-ellipsis" style={{ fontWeight: 700, fontSize: 13.5, flex: "1 1 auto" }}>{x.bank} <span style={{ color: C.ink2, fontWeight: 500 }}>{x.product}</span></span>
+                  <span className="pb-shrink0"><Num value={`${ccySign(x.ccy)}${money(x.principal)}`} size={13.5} weight={800} /></span>
                 </div>
                 <div className="flex justify-between items-center gap-2 mt-1">
-                  <span style={{ fontSize: 11.5, color: C.ink2, fontFamily: MONO }}>
+                  <span className="pb-ellipsis" style={{ fontSize: 11.5, color: C.ink2, fontFamily: MONO, flex: "1 1 auto" }}>
                     {n(x.rate).toFixed(2)}% · {fmtShort(x.i.maturity, lang)}{x.ccy !== "HKD" ? ` · HK$${money(x.i.hkd)}` : ""}
                   </span>
-                  <span className="flex gap-1 items-center">
+                  <span className="flex gap-1 items-center pb-shrink0">
                     {x.autoRenew && <Chip tone="grey">{tr("自動續存", "auto")}</Chip>}
                     <Chip tone={x.i.status === "matured" ? "red" : x.i.status === "due" ? "gold" : "jade"}>{x.i.left <= 0 ? L("matured") : `${x.i.left}${tr("日", "d")}`}</Chip>
                   </span>
@@ -753,12 +760,12 @@ function Deposits({ st, d, up, lang }) {
                     <Lbl t={L("Placed on")}><TextIn type="date" value={x.start} onChange={(v) => up((s) => { s.deposits[i].start = v; })} /></Lbl>
                   </div>
                   <div className="flex justify-between items-center mt-3 pt-3 gap-2" style={{ borderTop: `1px solid ${C.rule}` }}>
-                    <div>
+                    <div style={{ minWidth: 0 }}>
                       <Eyebrow>{L("Interest this term")}</Eyebrow>
-                      <Num value={`${ccySign(x.ccy)}${money(x.i.interest, 2)}`} size={14} weight={800} color={C.gold} />
+                      <Num value={`${ccySign(x.ccy)}${money(x.i.interest, 2)}`} size={14} weight={800} color={C.gold} wrap />
                       <span style={{ fontSize: 11.5, color: C.ink2, marginLeft: 6 }}>→ {ccySign(x.ccy)}{money(x.i.atMaturity, 2)}</span>
                     </div>
-                    <label className="flex items-center gap-2" style={{ fontSize: 12, color: C.ink2, cursor: "pointer" }}>
+                    <label className="flex items-center gap-2 pb-shrink0" style={{ fontSize: 12, color: C.ink2, cursor: "pointer" }}>
                       <input type="checkbox" checked={!!x.autoRenew} onChange={(e) => up((s) => { s.deposits[i].autoRenew = e.target.checked; })} />
                       {L("Bank renews")}
                     </label>
@@ -787,8 +794,9 @@ function Deposits({ st, d, up, lang }) {
           <Eyebrow>{L("Closed")}</Eyebrow>
           {st.deposits.map((x, i) => x.closed && (
             <div key={x.id} className="flex justify-between items-center mt-2 gap-2" style={{ fontSize: 13 }}>
-              <span>{x.bank} · {ccySign(x.ccy)}{money(x.principal)}</span>
-              <div className="flex gap-2">
+              <span className="pb-ellipsis" style={{ flex: "1 1 auto" }}>{x.bank}</span>
+              <span className="pb-shrink0">{ccySign(x.ccy)}{money(x.principal)}</span>
+              <div className="flex gap-2 pb-shrink0">
                 <Btn size="sm" onClick={() => up((s) => { s.deposits[i].closed = false; })}>{L("Reopen")}</Btn>
                 <Btn size="sm" tone="danger" onClick={() => up((s) => { s.deposits.splice(i, 1); })}>{L("Delete")}</Btn>
               </div>
@@ -854,7 +862,7 @@ function Month({ st, d, up, lang }) {
         </select>
         <div className="ml-auto text-right">
           <Eyebrow>{L("Kept this month")}</Eyebrow>
-          <Num value={money(net)} prefix="HK$" size={18} weight={800} color={net < 0 ? C.red : C.jade} />
+          <Num value={money(net)} prefix="HK$" size={18} weight={800} color={net < 0 ? C.red : C.jade} wrap />
         </div>
       </div>
 
@@ -1085,7 +1093,7 @@ function Goals({ st, d, up, lang }) {
               {done ? <Chip tone="jade">{L("done")}</Chip> : late ? <Chip tone="red">{L("past date")}</Chip> : behind ? <Chip tone="gold">{L("short")}</Chip> : <Chip tone="jade">{L("on track")}</Chip>}
             </div>
             <div className="flex items-end justify-between mt-3">
-              <Num value={money(g.current)} prefix="HK$" size={22} weight={800} color={tone} />
+              <Num value={money(g.current)} prefix="HK$" size={22} weight={800} color={tone} wrap />
               <span style={{ fontSize: 12.5, color: C.ink2 }}>{tr(`／HK$${money(g.target)} · ${pct.toFixed(0)}%`, `of HK$${money(g.target)} · ${pct.toFixed(0)}%`)}</span>
             </div>
             <div className="mt-2"><Bar2 pct={pct} color={tone} h={8} /></div>
@@ -1116,7 +1124,7 @@ function Goals({ st, d, up, lang }) {
       <Card accent={C.gold}>
         <Eyebrow>{L("All goals together")}</Eyebrow>
         <div className="flex items-end justify-between mt-1">
-          <Num value={money(d.goalNow)} prefix="HK$" size={20} weight={800} />
+          <Num value={money(d.goalNow)} prefix="HK$" size={20} weight={800} wrap />
           <span style={{ fontSize: 12.5, color: C.ink2 }}>{tr(`／HK$${money(d.goalTarget)}`, `of HK$${money(d.goalTarget)}`)}</span>
         </div>
         <div className="mt-2"><Bar2 pct={d.goalTarget ? (d.goalNow / d.goalTarget) * 100 : 0} color={C.gold} h={8} /></div>
