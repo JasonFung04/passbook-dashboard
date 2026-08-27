@@ -14,9 +14,12 @@ const normalise = (state) => {
   state.settings.rates.USD ||= 7.8;
   state.settings.rates.CNY ||= 1.09;
   state.snapshots ||= [];
+  state.cash ||= { balance: 0, note: "" };
+  state.debts ||= [];
   state.tx = (state.tx || []).map((item) => ({ ccy: "HKD", ...item }));
   state.income = (state.income || []).map((item) => ({ ccy: "HKD", ...item }));
   state.budget = (state.budget || []).map((item) => ({ ccy: "HKD", ...item }));
+  state.debts = state.debts.map((item) => ({ ccy: "HKD", ...item }));
   return state;
 };
 

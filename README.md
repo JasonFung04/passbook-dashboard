@@ -14,6 +14,7 @@ A private, mobile-friendly personal finance dashboard for managing budgets, tran
 - Financial goals, progress tracking, and planning insights
 - Traditional Chinese / English interface switch, driven by React state (not DOM text-patching)
 - HKD, USD and CNY support for income, budget, transactions and deposits, converted to a HKD total with editable exchange rates
+- Liquid cash and debt tracking, factored into net worth and the Grow tab's priority checklist
 - Mobile-friendly interface and explicit sign-out control
 
 ## Stack
@@ -65,6 +66,7 @@ Every user-visible feature, interface, deployment, or security change must updat
 - Fixed the "order money should move" priority steps on the Grow tab: three of the six steps had their completion status hardcoded (always "done" or always "not done") regardless of actual data. Steps 1 and 3 (liquid cash, high-interest debt) aren't derivable at all — the app tracks neither — so they now show as an honest, neutral "not tracked" reminder instead of a false "done". Step 4 (near-term money in deposits) is now computed for real from your goals' deadlines against your deposit total.
 - Removed or caveated several Grow-tab claims that were stated as fact without any way for the app to verify them: an unsourced "current" HKD/USD market-rate range in the yield explanation (removed — only your own computed blended yield and real return remain), a tax-bracket assumption hardcoded to the original sample income regardless of your actual income (removed — now points you to check your own bracket), and the deposit-protection limit and fund-tax figures (kept, since they're stable published rules, but now explicitly flagged as reference figures to confirm yourself rather than live-verified data).
 - Removed a leftover example dollar figure ("a HK$550 driving lesson") from step 1's copy — it was the original sample seed data's own transaction amount, hardcoded into the general advice text as if it applied to everyone.
+- Added liquid-cash and debt tracking, so steps 1 (current-account cushion) and 3 (high-interest debt) on the Grow tab are now genuinely computed and verified instead of an unverifiable placeholder. Both feed into net worth as well (cash added, debt subtracted).
 
 ## Security notes
 
