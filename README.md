@@ -12,7 +12,8 @@ A private, mobile-friendly personal finance dashboard for managing budgets, tran
 - Budget planning and monthly ledger / P&L tracking
 - Time-deposit list, maturity ladder, renewal status, and interest estimates
 - Financial goals, progress tracking, and planning insights
-- Traditional Chinese / English interface switch
+- Traditional Chinese / English interface switch, driven by React state (not DOM text-patching)
+- HKD, USD and CNY support for income, budget, transactions and deposits, converted to a HKD total with editable exchange rates
 - Mobile-friendly interface and explicit sign-out control
 
 ## Stack
@@ -52,6 +53,13 @@ Every user-visible feature, interface, deployment, or security change must updat
 - Added a Traditional Chinese / English UI switch and a mobile sign-out control.
 - Positioned the language switch at the top centre with reserved header space to avoid obscuring page content.
 - Added a date-safety guard so temporarily blank or invalid time-deposit dates do not crash the dashboard.
+- Rebuilt the language switch as a proper React-driven i18n layer (`src/i18n.js`), replacing the DOM text-replacement script that only translated a partial, hard-to-maintain set of strings.
+- Fixed the exchange-rate field on the Deposits tab, which edited an unused `settings.fx` value instead of the `settings.rates` actually used for HKD conversion; removed the related dead `fx` output and the `globalThis.fx` workaround.
+- Added CNY as a third supported currency (alongside HKD and USD) for deposits, income, budget lines and ledger transactions, with editable USD and CNY exchange rates; all totals (net worth, budget, savings rate, P&L) convert consistently to HKD. Existing records default to HKD non-destructively.
+- Replaced the global `Date.prototype` patch (added as a page-wide workaround for the "Invalid time value" crash) with a scoped date guard in the app's own date helpers.
+- Switched the JSX build to `@vitejs/plugin-react`'s automatic runtime, removing the `globalThis.React` workaround that had been needed because Vite's default classic JSX transform requires `React` in scope.
+- Replaced the Tailwind CDN script (not recommended for production — no purge, runtime JIT compile) with a small local utility stylesheet covering only the classes the app actually uses.
+- Consolidated the Supabase project URL/key into a single `src/supabaseClient.js` instead of duplicating them across `index.html` and `src/main.jsx`.
 
 ## Security notes
 
