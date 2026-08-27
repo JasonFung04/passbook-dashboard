@@ -528,7 +528,7 @@ function Grow({ st, d, up, lang }) {
 
   const steps = [
     { n: 1, t: tr("一個月的開支保持流動", "One month of spending stays liquid"), amt: d.plannedExp, done: null,
-      l: tr(`HK$${money(d.plannedExp)} 放在往來戶口，不鎖進任何定期。這樣一筆 HK$550 的駕駛課才不會逼你提早解約、損失利息。Passbook 未有記錄你的活期現金，這一步無法自動核對，僅供提醒。`, `HK$${money(d.plannedExp)} in the current account, never locked in a term. This is what stops a HK$550 driving lesson from breaking a deposit early and forfeiting the interest. Passbook doesn't track your current-account balance, so this step can't be checked automatically — it's a reminder, not a verified status.`) },
+      l: tr(`HK$${money(d.plannedExp)} 放在往來戶口，不鎖進任何定期。這樣遇到突發開支時，才不會被逼提早解約定存、損失利息。Passbook 未有記錄你的活期現金，這一步無法自動核對，僅供提醒。`, `HK$${money(d.plannedExp)} in the current account, never locked in a term. This is what stops an unexpected bill from forcing you to break a deposit early and forfeit the interest. Passbook doesn't track your current-account balance, so this step can't be checked automatically — it's a reminder, not a verified status.`) },
     { n: 2, t: tr(`${s.emergencyMonths} 個月的階梯式預備金`, `Cushion of ${s.emergencyMonths} months, laddered`), amt: d.emergencyTarget, done: gapToEmergency <= 0,
       l: gapToEmergency > 0 ? tr(`還差 HK$${money(gapToEmergency)}。繼續用 Mox 短期定存，讓每個月都有一筆到期——短期利率加上近乎即時的靈活性。`, `HK$${money(gapToEmergency)} still to build. Keep using short Mox terms so a rung matures every month — term rates with near-instant access.`)
         : tr("已經足夠。續存就好，不用再加碼——之後多出來的錢全部進第 5 步。", "Full. Roll it, don't grow it. Everything beyond this goes to step 5.") },
