@@ -1,1 +1,21 @@
-{"name":"passbook-dashboard","private":true,"version":"1.0.0","type":"module","scripts":{"dev":"vite","build":"vite build","preview":"vite preview"},"dependencies":{"@supabase/supabase-js":"^2.57.0","react":"^19.1.1","react-dom":"^19.1.1","recharts":"^3.1.2","vite":"^7.1.7"}}
+{
+  "name": "passbook-dashboard",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.57.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "recharts": "^3.1.2"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^7.1.7"
+  }
+}
