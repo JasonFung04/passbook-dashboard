@@ -57,9 +57,11 @@ const D = (bank, ccy, product, principal, rate, termMonths, startedDaysAgo, auto
 });
 
 const SEED = {
-  v: 4,
+  v: 5,
   settings: { rates: { USD: 7.8, CNY: 1.09 }, inflation: 2.5, investReturn: 6.5, emergencyMonths: 6 },
   portfolio: { value: 0, monthly: 0, note: "" },
+  cash: { balance: 0, note: "" },
+  debts: [],
   snapshots: [],
   income: [{ id: uid(), source: "Monthly salary", amount: 18000, ccy: "HKD" }],
   budget: [
@@ -115,10 +117,13 @@ function migrate(s) {
   if (!s.settings.rates.USD) s.settings.rates.USD = 7.8;
   if (!s.settings.rates.CNY) s.settings.rates.CNY = 1.09;
   if (!s.snapshots) s.snapshots = [];
+  if (!s.cash) s.cash = { balance: 0, note: "" };
+  if (!s.debts) s.debts = [];
   s.tx = (s.tx || []).map((t) => ({ ccy: "HKD", ...t }));
   s.income = (s.income || []).map((r) => ({ ccy: "HKD", ...r }));
   s.budget = (s.budget || []).map((r) => ({ ccy: "HKD", ...r }));
-  s.v = 4;
+  s.debts = s.debts.map((r) => ({ ccy: "HKD", ...r }));
+  s.v = 5;
   return s;
 }
 async function load() {
@@ -258,14 +263,16 @@ export default function Passbook({ lang = "zh", onSignOut }) {
     const sm = Object.values(savByMonth);
     const avgSave = sm.length ? sm.reduce((a, b) => a + b, 0) / sm.length : 0;
 
-    const netWorth = depHKD + n(st.portfolio.value);
+    const cashHKD = n(st.cash?.balance);
+    const debtHKD = (st.debts || []).reduce((a, x) => a + toHKD(x.balance, x.ccy || "HKD", rates), 0);
+    const netWorth = depHKD + n(st.portfolio.value) + cashHKD - debtHKD;
     const emergencyTarget = plannedExp * n(st.settings.emergencyMonths);
     const cover = plannedExp ? depHKD / plannedExp : 0;
 
     return {
       income, plannedExp, plannedSave, essentials, surplus: income - plannedExp - plannedSave,
       months, goalTarget, goalNow, live, depHKD, usdHKD, cnyHKD, blended, idle, nextManual, due30,
-      perBank, banks, avgSave, netWorth, emergencyTarget, cover, rates,
+      perBank, banks, avgSave, netWorth, emergencyTarget, cover, rates, cashHKD, debtHKD,
     };
   }, [st]);
 
@@ -526,14 +533,49 @@ function Grow({ st, d, up, lang }) {
     return a + Math.max(0, n(g.target) - n(g.current));
   }, 0);
 
+  const cashBalance = n(st.cash?.balance);
+  const cashShort = Math.max(0, d.plannedExp - cashBalance);
+  const highInterestDebt = st.debts.reduce((a, x) => a + (n(x.rate) > 6 ? toHKD(x.balance, x.ccy || "HKD", rates) : 0), 0);
+
   const steps = [
-    { n: 1, t: tr("一個月的開支保持流動", "One month of spending stays liquid"), amt: d.plannedExp, done: null,
-      l: tr(`HK$${money(d.plannedExp)} 放在往來戶口，不鎖進任何定期。這樣遇到突發開支時，才不會被逼提早解約定存、損失利息。Passbook 未有記錄你的活期現金，這一步無法自動核對，僅供提醒。`, `HK$${money(d.plannedExp)} in the current account, never locked in a term. This is what stops an unexpected bill from forcing you to break a deposit early and forfeit the interest. Passbook doesn't track your current-account balance, so this step can't be checked automatically — it's a reminder, not a verified status.`) },
+    { n: 1, t: tr("一個月的開支保持流動", "One month of spending stays liquid"), amt: d.plannedExp, done: cashBalance >= d.plannedExp,
+      l: cashBalance >= d.plannedExp
+        ? tr(`活期戶口有 HK$${money(cashBalance)}，足夠覆蓋一個月 HK$${money(d.plannedExp)} 的開支，不鎖進任何定期。這樣遇到突發開支時，才不會被逼提早解約定存、損失利息。`, `HK$${money(cashBalance)} in the current account covers a full month's HK$${money(d.plannedExp)} of spending, none of it locked in a term. This is what stops an unexpected bill from forcing you to break a deposit early and forfeit the interest.`)
+        : tr(`活期戶口目前 HK$${money(cashBalance)}，距離一個月 HK$${money(d.plannedExp)} 的開支還差 HK$${money(cashShort)}。先把這筆補到活期戶口，不鎖進任何定期。`, `The current account holds HK$${money(cashBalance)}, still HK$${money(cashShort)} short of a full month's HK$${money(d.plannedExp)} of spending. Build this up in the current account first, none of it locked in a term.`),
+      extra: (
+        <div className="mt-2" style={{ maxWidth: 220 }}>
+          <Lbl t={tr("目前活期戶口餘額 HK$", "Current-account balance now, HK$")}>
+            <TextIn type="number" right value={st.cash?.balance ?? 0} onChange={(v) => up((x) => { x.cash.balance = v; })} />
+          </Lbl>
+        </div>
+      ) },
     { n: 2, t: tr(`${s.emergencyMonths} 個月的階梯式預備金`, `Cushion of ${s.emergencyMonths} months, laddered`), amt: d.emergencyTarget, done: gapToEmergency <= 0,
       l: gapToEmergency > 0 ? tr(`還差 HK$${money(gapToEmergency)}。繼續用 Mox 短期定存，讓每個月都有一筆到期——短期利率加上近乎即時的靈活性。`, `HK$${money(gapToEmergency)} still to build. Keep using short Mox terms so a rung matures every month — term rates with near-instant access.`)
         : tr("已經足夠。續存就好，不用再加碼——之後多出來的錢全部進第 5 步。", "Full. Roll it, don't grow it. Everything beyond this goes to step 5.") },
-    { n: 3, t: tr("清還任何利率高於約 6% 的債務", "Clear anything costing more than about 6%"), amt: null, done: null,
-      l: tr("卡數、分期、學費貸款。還清一筆等於一個保證回報，沒有任何定存比得上。沒有的話這步可以跳過。Passbook 未有記錄任何負債，這一步無法自動核對，僅供提醒。", "Card balances, instalment plans, tuition financing. Paying one off is a guaranteed return no deposit can match. Skip if you have none. Passbook doesn't track any debts, so this step can't be checked automatically — it's a reminder, not a verified status.") },
+    { n: 3, t: tr("清還任何利率高於約 6% 的債務", "Clear anything costing more than about 6%"), amt: highInterestDebt || null, done: highInterestDebt <= 0,
+      l: highInterestDebt > 0
+        ? tr(`目前有 HK$${money(highInterestDebt)} 的負債利率高於 6%——卡數、分期、學費貸款之類。優先還清這筆，等於一個保證回報，沒有任何定存比得上。`, `HK$${money(highInterestDebt)} of debt is currently costing more than 6% — card balances, instalment plans, tuition financing and the like. Clear this first: it's a guaranteed return no deposit can match.`)
+        : st.debts.length > 0
+          ? tr("目前記錄的負債利率都不高於 6%，這一步不用優先處理。", "None of your recorded debts cost more than 6% — nothing urgent to clear here.")
+          : tr("目前沒有記錄任何負債。如果有卡數、分期或學費貸款，加在下面。", "No debts recorded. If you have card balances, instalment plans, or tuition financing, add them below."),
+      extra: (
+        <div className="mt-2 space-y-2">
+          {st.debts.map((deb, i) => (
+            <div key={deb.id} style={{ background: "#fff", border: `1px solid ${C.rule}`, borderRadius: 2, padding: 8 }}>
+              <div className="flex gap-2">
+                <TextIn value={deb.name} onChange={(v) => up((x) => { x.debts[i].name = v; })} placeholder={tr("負債名稱（例如：信用卡）", "Debt name (e.g. credit card)")} />
+                <Btn size="sm" tone="danger" onClick={() => up((x) => { x.debts.splice(i, 1); })}>×</Btn>
+              </div>
+              <div className="grid grid-cols-3 gap-2 mt-2">
+                <Lbl t={tr("結餘", "Balance")}><TextIn type="number" right value={deb.balance} onChange={(v) => up((x) => { x.debts[i].balance = v; })} /></Lbl>
+                <Lbl t={L("Currency")}><CcySelect value={deb.ccy} onChange={(v) => up((x) => { x.debts[i].ccy = v; })} w="100%" /></Lbl>
+                <Lbl t={L("Rate % p.a.")}><TextIn type="number" step="0.1" right value={deb.rate} onChange={(v) => up((x) => { x.debts[i].rate = v; })} /></Lbl>
+              </div>
+            </div>
+          ))}
+          <Btn size="sm" onClick={() => up((x) => { x.debts.push({ id: uid(), name: "", balance: 0, rate: 0, ccy: "HKD" }); })}>{tr("+ 新增負債", "+ Add a debt")}</Btn>
+        </div>
+      ) },
     { n: 4, t: tr("三年內要用的錢，繼續放定存", "Money needed within 3 years stays in deposits"), amt: near3yShort || null, done: near3yShort <= d.depHKD,
       l: near3yShort > d.depHKD
         ? tr(`三年內到期的目標還差 HK$${money(near3yShort)}，但你的定存總額只有 HK$${money(d.depHKD)}，不夠完全覆蓋。旅行、父母的手機、駕駛牌照——把定存年期對準用錢的日子，例如選一筆在付款前一星期到期的 6 個月定存。`, `Goals due within 3 years still need HK$${money(near3yShort)}, but your total deposits are only HK$${money(d.depHKD)} — not quite enough to cover them. Travel, parents' phone, the driving licence — match the term to the date you need it, a 6-month deposit maturing the week before you pay.`)
@@ -567,6 +609,7 @@ function Grow({ st, d, up, lang }) {
                     {x.amt != null && <Num value={money(x.amt)} prefix="HK$" size={12.5} color={C.ink2} />}
                   </div>
                   <div style={{ fontSize: 12.5, color: C.ink2, lineHeight: 1.5, marginTop: 2 }}>{x.l}</div>
+                  {x.extra}
                 </div>
               </li>
             );
