@@ -62,6 +62,7 @@ Every user-visible feature, interface, deployment, or security change must updat
 - Consolidated the Supabase project URL/key into a single `src/supabaseClient.js` instead of duplicating them across `index.html` and `src/main.jsx`.
 - Fixed several spots (header net worth, deposit rows, next-renewal card) where a long bank name or a large HKD figure could squeeze a currency amount off-screen; amounts now always stay fully visible, with long labels truncating or wrapping instead.
 - Made the "Currency mix" check on the Grow tab reflect real CNY exposure instead of always showing "good", and replaced the yield commentary's fixed calendar-date market snapshot with evergreen guidance so it doesn't read as stale over time — the personalized numbers (blended yield, real return, savings rate, etc.) already recalculate live from your data.
+- Fixed the "order money should move" priority steps on the Grow tab: three of the six steps had their completion status hardcoded (always "done" or always "not done") regardless of actual data. Steps 1 and 3 (liquid cash, high-interest debt) aren't derivable at all — the app tracks neither — so they now show as an honest, neutral "not tracked" reminder instead of a false "done". Step 4 (near-term money in deposits) is now computed for real from your goals' deadlines against your deposit total.
 
 ## Security notes
 

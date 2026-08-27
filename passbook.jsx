@@ -518,16 +518,26 @@ function Grow({ st, d, up, lang }) {
   const gap20 = last.Split - last.Deposits;
   const real20 = gap20 / Math.pow(1 + n(s.inflation) / 100, 20);
 
+  // Goals due within 3 years that deposits alone can (or can't) still cover —
+  // the one part of "money needed soon stays in deposits" this app can actually verify.
+  const near3yShort = st.goals.reduce((a, g) => {
+    const dl = daysBetween(new Date(), g.deadline);
+    if (!Number.isFinite(dl) || dl <= 0 || dl / 365 > 3) return a;
+    return a + Math.max(0, n(g.target) - n(g.current));
+  }, 0);
+
   const steps = [
-    { n: 1, t: tr("一個月的開支保持流動", "One month of spending stays liquid"), amt: d.plannedExp, done: true,
-      l: tr(`HK$${money(d.plannedExp)} 放在往來戶口，不鎖進任何定期。這樣一筆 HK$550 的駕駛課才不會逼你提早解約、損失利息。`, `HK$${money(d.plannedExp)} in the current account, never locked in a term. This is what stops a HK$550 driving lesson from breaking a deposit early and forfeiting the interest.`) },
+    { n: 1, t: tr("一個月的開支保持流動", "One month of spending stays liquid"), amt: d.plannedExp, done: null,
+      l: tr(`HK$${money(d.plannedExp)} 放在往來戶口，不鎖進任何定期。這樣一筆 HK$550 的駕駛課才不會逼你提早解約、損失利息。Passbook 未有記錄你的活期現金，這一步無法自動核對，僅供提醒。`, `HK$${money(d.plannedExp)} in the current account, never locked in a term. This is what stops a HK$550 driving lesson from breaking a deposit early and forfeiting the interest. Passbook doesn't track your current-account balance, so this step can't be checked automatically — it's a reminder, not a verified status.`) },
     { n: 2, t: tr(`${s.emergencyMonths} 個月的階梯式預備金`, `Cushion of ${s.emergencyMonths} months, laddered`), amt: d.emergencyTarget, done: gapToEmergency <= 0,
       l: gapToEmergency > 0 ? tr(`還差 HK$${money(gapToEmergency)}。繼續用 Mox 短期定存，讓每個月都有一筆到期——短期利率加上近乎即時的靈活性。`, `HK$${money(gapToEmergency)} still to build. Keep using short Mox terms so a rung matures every month — term rates with near-instant access.`)
         : tr("已經足夠。續存就好，不用再加碼——之後多出來的錢全部進第 5 步。", "Full. Roll it, don't grow it. Everything beyond this goes to step 5.") },
-    { n: 3, t: tr("清還任何利率高於約 6% 的債務", "Clear anything costing more than about 6%"), amt: null, done: true,
-      l: tr("卡數、分期、學費貸款。還清一筆等於一個保證回報，沒有任何定存比得上。沒有的話這步可以跳過。", "Card balances, instalment plans, tuition financing. Paying one off is a guaranteed return no deposit can match. Skip if you have none.") },
-    { n: 4, t: tr("三年內要用的錢，繼續放定存", "Money needed within 3 years stays in deposits"), amt: null, done: true,
-      l: tr("旅行、父母的手機、駕駛牌照——把定存年期對準用錢的日子，例如選一筆在付款前一星期到期的 6 個月定存，而不是之後才到期。", "Travel, parents' phone, the driving licence. Match the term to the date you need it — a 6-month deposit maturing the week before you pay, not the week after.") },
+    { n: 3, t: tr("清還任何利率高於約 6% 的債務", "Clear anything costing more than about 6%"), amt: null, done: null,
+      l: tr("卡數、分期、學費貸款。還清一筆等於一個保證回報，沒有任何定存比得上。沒有的話這步可以跳過。Passbook 未有記錄任何負債，這一步無法自動核對，僅供提醒。", "Card balances, instalment plans, tuition financing. Paying one off is a guaranteed return no deposit can match. Skip if you have none. Passbook doesn't track any debts, so this step can't be checked automatically — it's a reminder, not a verified status.") },
+    { n: 4, t: tr("三年內要用的錢，繼續放定存", "Money needed within 3 years stays in deposits"), amt: near3yShort || null, done: near3yShort <= d.depHKD,
+      l: near3yShort > d.depHKD
+        ? tr(`三年內到期的目標還差 HK$${money(near3yShort)}，但你的定存總額只有 HK$${money(d.depHKD)}，不夠完全覆蓋。旅行、父母的手機、駕駛牌照——把定存年期對準用錢的日子，例如選一筆在付款前一星期到期的 6 個月定存。`, `Goals due within 3 years still need HK$${money(near3yShort)}, but your total deposits are only HK$${money(d.depHKD)} — not quite enough to cover them. Travel, parents' phone, the driving licence — match the term to the date you need it, a 6-month deposit maturing the week before you pay.`)
+        : tr("三年內到期的目標，目前定存總額足以覆蓋。繼續把年期對準用錢的日子，例如選一筆在付款前一星期到期的 6 個月定存，而不是之後才到期。", "Your total deposits currently cover what's needed for goals due within 3 years. Keep matching the term to the date you need it — a 6-month deposit maturing the week before you pay, not the week after.") },
     { n: 5, t: tr("之後所有錢，每月定投一隻環球指數基金", "Everything after that buys a global index fund, monthly"), amt: monthlySave, done: n(st.portfolio.value) > 0,
       l: tr("每月同一天、同一金額，不擇時。香港對資本增值和股息都不徵稅，所以一隻純累積型的環球追蹤基金已經足夠簡單。愛爾蘭註冊的 UCITS 基金只需付 15% 美股股息預扣稅（而非 30%），也能避開美股持倉的美國遺產稅風險。", "Same day each month, same amount, no timing. Hong Kong charges no tax on capital gains or dividends, so a plain accumulating world tracker is about as simple as it gets. An Irish-domiciled UCITS fund faces 15% US dividend withholding instead of 30%, and keeps you clear of US estate-tax exposure on US-listed holdings.") },
     { n: 6, t: tr("然後專注提升收入，而非追逐利率", "Then push income, not yield"), amt: null, done: false,
@@ -545,18 +555,22 @@ function Grow({ st, d, up, lang }) {
           <Chip tone="blue">{L("rule of thumb")}</Chip>
         </div>
         <ol className="mt-3 space-y-3" style={{ listStyle: "none", padding: 0, margin: 0 }}>
-          {steps.map((x) => (
-            <li key={x.n} className="flex gap-3">
-              <div style={{ minWidth: 24, height: 24, borderRadius: 2, background: x.done ? C.jadeSoft : C.goldSoft, color: x.done ? C.jade : C.gold, fontFamily: MONO, fontWeight: 800, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center" }}>{x.n}</div>
-              <div style={{ flex: 1 }}>
-                <div className="flex justify-between gap-2 items-baseline">
-                  <span style={{ fontWeight: 700, fontSize: 14 }}>{x.t}</span>
-                  {x.amt != null && <Num value={money(x.amt)} prefix="HK$" size={12.5} color={C.ink2} />}
+          {steps.map((x) => {
+            const circleBg = x.done === true ? C.jadeSoft : x.done === false ? C.goldSoft : "#E4E9E4";
+            const circleFg = x.done === true ? C.jade : x.done === false ? C.gold : C.ink2;
+            return (
+              <li key={x.n} className="flex gap-3">
+                <div style={{ minWidth: 24, height: 24, borderRadius: 2, background: circleBg, color: circleFg, fontFamily: MONO, fontWeight: 800, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center" }}>{x.n}</div>
+                <div style={{ flex: 1 }}>
+                  <div className="flex justify-between gap-2 items-baseline">
+                    <span style={{ fontWeight: 700, fontSize: 14 }}>{x.t}</span>
+                    {x.amt != null && <Num value={money(x.amt)} prefix="HK$" size={12.5} color={C.ink2} />}
+                  </div>
+                  <div style={{ fontSize: 12.5, color: C.ink2, lineHeight: 1.5, marginTop: 2 }}>{x.l}</div>
                 </div>
-                <div style={{ fontSize: 12.5, color: C.ink2, lineHeight: 1.5, marginTop: 2 }}>{x.l}</div>
-              </div>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ol>
       </Card>
 
