@@ -125,6 +125,10 @@ function migrate(s) {
   if (!s.invest) s.invest = structuredClone(INVEST_DEFAULT);
   if (!s.invest.done) s.invest.done = {};
   if (!s.mpf) s.mpf = { history: [] };
+  if (!s.ot) s.ot = {};
+  if (!s.settings.otRate) s.settings.otRate = 45;
+  if (!s.leave) s.leave = { perYear: 12, anchorDate: todayISO(), anchorBalance: 12, days: [] };
+  if (!s.events) s.events = [];
   s.tx = (s.tx || []).map((t) => ({ ccy: "HKD", ...t }));
   s.income = (s.income || []).map((r) => ({ ccy: "HKD", ...r }));
   s.budget = (s.budget || []).map((r) => ({ ccy: "HKD", ...r }));
@@ -332,6 +336,64 @@ function investInfo(planIn, ibkr, rates) {
   return { plan, snap, fx, pos, valueUSD, costUSD, cashUSD, navHKD, pnlUSD, pnlPct, A, B, weightA, ageDays, hist, dayChange, buy };
 }
 
+/* ── pay: gross salary, MPF, overtime ────────────────────────── */
+// Mandatory employee MPF: 5% of relevant income (salary + OT), nothing
+// below HK$7,100 a month, capped at HK$1,500 (relevant income HK$30,000).
+const mpfEE = (relevant) => (n(relevant) < 7100 ? 0 : Math.min(n(relevant) * 0.05, 1500));
+function payInfo(st, rates, otHours = 0) {
+  const gross = st.income.reduce((a, b) => a + toHKD(b.amount, b.ccy || "HKD", rates), 0);
+  const relevant = st.income.filter((b) => b.mpf).reduce((a, b) => a + toHKD(b.amount, b.ccy || "HKD", rates), 0);
+  const otRate = n(st.settings.otRate) || 45;
+  const ot = n(otHours) * otRate;
+  const mpf = mpfEE(relevant + ot);
+  return { gross, relevant, ot, otRate, mpf, net: gross + ot - mpf };
+}
+
+/* ── Hong Kong general holidays (= bank holidays) ────────────── */
+// Source: HKSAR Government gazette, via info.gov.hk (2026) and EDB (2027).
+const HK_HOLIDAYS = {
+  "2026-01-01": ["一月一日", "New Year's Day"], "2026-02-17": ["農曆年初一", "Lunar New Year's Day"],
+  "2026-02-18": ["農曆年初二", "Second day of Lunar New Year"], "2026-02-19": ["農曆年初三", "Third day of Lunar New Year"],
+  "2026-04-03": ["耶穌受難節", "Good Friday"], "2026-04-04": ["耶穌受難節翌日", "Day after Good Friday"],
+  "2026-04-06": ["清明節翌日", "Day after Ching Ming"], "2026-04-07": ["復活節星期一翌日", "Day after Easter Monday"],
+  "2026-05-01": ["勞動節", "Labour Day"], "2026-05-25": ["佛誕翌日", "Day after Buddha's Birthday"],
+  "2026-06-19": ["端午節", "Tuen Ng Festival"], "2026-07-01": ["香港特別行政區成立紀念日", "HKSAR Establishment Day"],
+  "2026-09-26": ["中秋節翌日", "Day after Mid-Autumn"], "2026-10-01": ["國慶日", "National Day"],
+  "2026-10-19": ["重陽節翌日", "Day after Chung Yeung"], "2026-12-25": ["聖誕節", "Christmas Day"],
+  "2026-12-26": ["聖誕節後第一個周日", "First weekday after Christmas"],
+  "2027-01-01": ["一月一日", "New Year's Day"], "2027-02-06": ["農曆年初一", "Lunar New Year's Day"],
+  "2027-02-08": ["農曆年初三", "Third day of Lunar New Year"], "2027-02-09": ["農曆年初四", "Fourth day of Lunar New Year"],
+  "2027-03-26": ["耶穌受難節", "Good Friday"], "2027-03-27": ["耶穌受難節翌日", "Day after Good Friday"],
+  "2027-03-29": ["復活節星期一", "Easter Monday"], "2027-04-05": ["清明節", "Ching Ming Festival"],
+  "2027-05-01": ["勞動節", "Labour Day"], "2027-05-13": ["佛誕", "Buddha's Birthday"],
+  "2027-06-09": ["端午節", "Tuen Ng Festival"], "2027-07-01": ["香港特別行政區成立紀念日", "HKSAR Establishment Day"],
+  "2027-09-16": ["中秋節翌日", "Day after Mid-Autumn"], "2027-10-01": ["國慶日", "National Day"],
+  "2027-10-08": ["重陽節", "Chung Yeung Festival"], "2027-12-25": ["聖誕節", "Christmas Day"],
+  "2027-12-27": ["聖誕節後第一個周日", "First weekday after Christmas"],
+};
+const HOLIDAY_YEARS = [2026, 2027];
+const isoLocal = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+const dowOf = (isoStr) => new Date(isoStr + "T00:00:00").getDay();   // 0 Sun … 6 Sat
+const isWorkday = (isoStr) => { const w = dowOf(isoStr); return w !== 0 && w !== 6 && !HK_HOLIDAYS[isoStr]; };
+const eachDay = (a, b) => { const out = []; if (!a || !b || b < a) return out; const dt = new Date(a + "T00:00:00"); while (isoLocal(dt) <= b) { out.push(isoLocal(dt)); dt.setDate(dt.getDate() + 1); } return out; };
+
+// Leave balance per calendar year. In the anchor year the balance the
+// user gave (e.g. 7.5 on 26 Oct) already counts everything up to that
+// date, so only leave after it is deducted.
+function leaveInfo(lv, year) {
+  const days = (lv?.days || []).filter((x) => String(x.date).startsWith(String(year)));
+  const anchorYear = lv?.anchorDate ? +String(lv.anchorDate).slice(0, 4) : null;
+  const today = todayISO();
+  const counted = year === anchorYear ? days.filter((x) => x.date > lv.anchorDate) : days;
+  const base = year === anchorYear ? n(lv.anchorBalance) : n(lv?.perYear) || 12;
+  const used = counted.reduce((a, x) => a + n(x.amt), 0);
+  const taken = counted.filter((x) => x.date <= today).reduce((a, x) => a + n(x.amt), 0);
+  return { year, base, left: base - used, planned: used - taken, taken, days };
+}
+const leaveOn = (lv, date) => (lv?.days || []).find((x) => x.date === date);
+// Workdays in an event's range that aren't already booked as leave.
+const leaveNeeded = (lv, ev) => eachDay(ev.start, ev.end || ev.start).filter((x) => isWorkday(x) && !leaveOn(lv, x));
+
 /* ── MPF maths ───────────────────────────────────────────────── */
 // Mandatory contributions: 5% each side on relevant income, capped at
 // HK$1,500 a month each (employee pays nothing below HK$7,100 a month).
@@ -426,7 +488,8 @@ export default function Passbook({ lang = "zh", onSignOut, onLang }) {
   const d = useMemo(() => {
     if (!st) return null;
     const rates = st.settings.rates || { USD: 7.8, CNY: 1.09 };
-    const income = st.income.reduce((a, b) => a + toHKD(b.amount, b.ccy || "HKD", rates), 0);
+    const pay = payInfo(st, rates);
+    const income = pay.net;   // take-home after the employee's 5% MPF; OT is added per month
     const plannedExp = st.budget.filter((b) => b.group !== "Savings").reduce((a, b) => a + toHKD(b.amount, b.ccy || "HKD", rates), 0);
     const plannedSave = st.budget.filter((b) => b.group === "Savings").reduce((a, b) => a + toHKD(b.amount, b.ccy || "HKD", rates), 0);
     const essentials = st.budget.filter((b) => b.group === "Living").reduce((a, b) => a + toHKD(b.amount, b.ccy || "HKD", rates), 0);
@@ -458,7 +521,11 @@ export default function Passbook({ lang = "zh", onSignOut, onLang }) {
     const investedHKD = n(st.portfolio.value) + inv.navHKD;
     const netWorth = depHKD + investedHKD + cashHKD - debtHKD;
     const emergencyTarget = plannedExp * n(st.settings.emergencyMonths);
-    const cover = plannedExp ? depHKD / plannedExp : 0;
+    // Emergency money is what the "Contingency/Emergency" goal holds, not every
+    // deposit — the wedding fund sits in deposits too and must not count.
+    const eGoal = st.goals.find((g) => /contingen|emergenc|應急|預備/i.test(g.name || ""));
+    const emergencyHKD = eGoal ? n(eGoal.current) : depHKD;
+    const cover = plannedExp ? emergencyHKD / plannedExp : 0;
 
     const subs = (st.subs || []).filter((x) => !x.closed).map((x) => ({ ...x, i: subInfo(x, rates) }))
       .sort((a, b) => (Number.isNaN(a.i.left) ? 1e9 : a.i.left) - (Number.isNaN(b.i.left) ? 1e9 : b.i.left));
@@ -472,7 +539,8 @@ export default function Passbook({ lang = "zh", onSignOut, onLang }) {
       perBank, banks, avgSave, netWorth, emergencyTarget, cover, rates, cashHKD, debtHKD,
       subs, subsMonthly, dueDeps, dueSubs, inv, investedHKD,
       bankRates: mkt?.rates || null, fx: fxInfo(mkt?.fx || []),
-      mpf: mpfInfo(st.mpf, income),
+      mpf: mpfInfo(st.mpf, pay.relevant), pay, emergencyHKD, eGoal,
+      leaveNow: leaveInfo(st.leave, new Date().getFullYear()), leaveRaw: st.leave, events: st.events || [],
     };
   }, [st, ibkr, mkt]);
 
@@ -482,6 +550,7 @@ export default function Passbook({ lang = "zh", onSignOut, onLang }) {
   // Four everyday destinations in the tab bar; the rest live under More.
   const MAIN = [["overview", L("Overview"), "home"], ["deposits", L("Deposits"), "bank"], ["invest", L("Invest"), "chart"], ["fx", L("FX"), "swap"]];
   const MORE = [
+    ["leave", L("Leave"), tr(`年假日曆、公眾假期、行程 · 今年剩 ${d.leaveNow.left} 日`, `Leave calendar, holidays, trips · ${d.leaveNow.left} days left`)],
     ["subs", L("Subscriptions"), tr("訂閱、合約及保養到期", "Plans, contracts and warranties")],
     ["goals", L("Goals"), tr("應急錢、婚禮、旅行", "Emergency, wedding, travel")],
     ["month", L("Month"), tr("記錄收支，對比預算", "Log spending against the budget")],
@@ -536,6 +605,7 @@ export default function Passbook({ lang = "zh", onSignOut, onLang }) {
         {tab === "subs" && <Subs st={st} d={d} up={up} lang={lang} />}
         {tab === "invest" && <Invest st={st} d={d} up={up} lang={lang} />}
         {tab === "fx" && <Fx st={st} d={d} up={up} lang={lang} />}
+        {tab === "leave" && <Leave st={st} d={d} up={up} lang={lang} />}
         {tab === "month" && <Month st={st} d={d} up={up} lang={lang} />}
         {tab === "budget" && <Plan st={st} d={d} up={up} lang={lang} />}
         {tab === "goals" && <Goals st={st} d={d} up={up} lang={lang} />}
@@ -703,6 +773,16 @@ function ComingUp({ d, go, lang }) {
       title: tr("更新強積金結餘", "Update your MPF balance"),
       what: tr("打開 eMPF App，把總結餘抄到「投資 › 強積金」，或把截圖發給 Claude。", "Open the eMPF app and copy the total into Invest › MPF, or send Claude a screenshot."),
     }] : []),
+    ...(d.events || []).filter((e) => { const k = daysBetween(new Date(), e.start); return k >= 0 && k <= 7; }).map((e) => ({
+      id: "ev-" + e.id, tab: "leave", date: new Date(e.start + "T00:00:00"), left: daysBetween(new Date(), e.start), late: false,
+      title: e.title, what: [e.time, e.note].filter(Boolean).join(" · ") || tr("行程", "Plan"),
+      extra: (() => { const k = leaveNeeded(d.leaveRaw, e).length; return k ? tr(`需請 ${k} 日假`, `Needs ${k} day${k > 1 ? "s" : ""} of leave`) : null; })(),
+    })),
+    ...(d.leaveNow.left > 0 && daysBetween(new Date(), `${d.leaveNow.year}-12-31`) <= 60 ? [{
+      id: "leave-year-end", tab: "leave", date: new Date(`${d.leaveNow.year}-12-31T00:00:00`), left: daysBetween(new Date(), `${d.leaveNow.year}-12-31`), late: false,
+      title: tr(`${d.leaveNow.year} 年假還有 ${d.leaveNow.left} 日`, `${d.leaveNow.left} days of ${d.leaveNow.year} leave left`),
+      what: tr("年底前安排好，或確認公司是否容許帶到明年。", "Book them before year-end, or check whether your company lets you carry them over."),
+    }] : []),
     ...d.dueSubs.map((x) => ({
       id: x.id, tab: "subs", date: x.i.actBy, left: x.i.left,
       title: x.name || tr("未命名", "Untitled"),
@@ -720,7 +800,7 @@ function ComingUp({ d, go, lang }) {
     })()] : []),
   ].sort((a, b) => a.left - b.left);
   if (!rows.length) return null;
-  const tabName = { deposits: tr("定存", "Deposits"), invest: tr("投資", "Invest"), subs: tr("訂閱", "Subscriptions") };
+  const tabName = { deposits: tr("定存", "Deposits"), invest: tr("投資", "Invest"), subs: tr("訂閱", "Subscriptions"), leave: tr("假期", "Leave") };
   const shown = all ? rows : rows.slice(0, 3);
   return (
     <Card accent={rows.some((r) => r.late) ? C.red : C.gold}>
@@ -774,7 +854,7 @@ function Grow({ st, d, up, lang }) {
   const s = st.settings;
   const invRate = n(s.investReturn);
   const monthlySave = d.plannedSave;
-  const gapToEmergency = Math.max(0, d.emergencyTarget - d.depHKD);
+  const gapToEmergency = Math.max(0, d.emergencyTarget - d.emergencyHKD);
 
   const rate = d.income ? (monthlySave / d.income) * 100 : 0;
   const usdPct = d.depHKD ? (d.usdHKD / d.depHKD) * 100 : 0;
@@ -791,7 +871,7 @@ function Grow({ st, d, up, lang }) {
     {
       t: L("Emergency cushion"), s: d.cover >= 6 ? "good" : d.cover >= 3 ? "watch" : "act", v: `${d.cover.toFixed(1)} ${tr("個月", "mo")}`,
       l: d.cover >= 6 ? tr("已經足夠。新資金可以開始投入增長，不用再放在現金。", "Fully stocked. New money can go to work instead of sitting in cash.")
-        : tr(`定存覆蓋了 ${d.cover.toFixed(1)} 個月的支出。在投資任何一塊錢之前，先補到 ${s.emergencyMonths} 個月（HK$${money(d.emergencyTarget)}）。`, `Deposits cover ${d.cover.toFixed(1)} months of spending. Fill to ${s.emergencyMonths} months (HK$${money(d.emergencyTarget)}) before investing a dollar.`),
+        : tr(`應急錢覆蓋了 ${d.cover.toFixed(1)} 個月的支出。在投資任何一塊錢之前，先補到 ${s.emergencyMonths} 個月（HK$${money(d.emergencyTarget)}）。`, `Emergency money covers ${d.cover.toFixed(1)} months of spending. Fill to ${s.emergencyMonths} months (HK$${money(d.emergencyTarget)}) before investing a dollar.`),
     },
     {
       t: L("Idle money"), s: d.idle > 0 ? "act" : "good", v: d.idle > 0 ? `HK$${money(d.idle)}` : tr("沒有", "None"),
@@ -1206,7 +1286,10 @@ function Month({ st, d, up, lang }) {
 
   const rows = st.tx.map((t, i) => ({ t, i })).filter((x) => monthKey(x.t.date) === m).sort((a, b) => a.t.date.localeCompare(b.t.date));
   const extraIn = rows.filter((x) => x.t.kind === "income").reduce((a, x) => a + toHKD(x.t.amount, x.t.ccy || "HKD", rates), 0);
-  const inflow = d.income + extraIn;
+  const otHours = n(st.ot?.[m]);
+  const payM = payInfo(st, rates, otHours);
+  const otNet = payM.net - d.income;   // OT pay less the extra 5% MPF it attracts
+  const inflow = payM.net + extraIn;
   let run = inflow;
   const withBal = rows.map((x) => { if (x.t.kind !== "income") run -= toHKD(x.t.amount, x.t.ccy || "HKD", rates); return { ...x, bal: run }; });
 
@@ -1222,7 +1305,7 @@ function Month({ st, d, up, lang }) {
   });
   Object.entries(byName).forEach(([k, v]) => pnl.push({ name: k, group: "Unplanned", budget: 0, actual: v, diff: -v }));
 
-  const gapToEmergency = Math.max(0, d.emergencyTarget - d.depHKD);
+  const gapToEmergency = Math.max(0, d.emergencyTarget - d.emergencyHKD);
   const keep = Math.max(0, net);
   const toCushion = Math.min(keep, gapToEmergency);
   const toInvest = keep - toCushion;
@@ -1243,9 +1326,29 @@ function Month({ st, d, up, lang }) {
         </select>
         <div className="ml-auto text-right">
           <Eyebrow>{L("Kept this month")}</Eyebrow>
-          <Num value={money(net)} prefix="HK$" size={18} weight={800} color={net < 0 ? C.red : C.jade} wrap />
+          <Num value={hk(net)} size={18} weight={800} color={net < 0 ? C.red : C.jade} wrap />
         </div>
       </div>
+
+      <Card>
+        <div className="flex justify-between items-center gap-3">
+          <div style={{ minWidth: 0 }}>
+            <Eyebrow>{tr("本月加班", "Overtime this month")}</Eyebrow>
+            <div style={{ fontSize: 12.5, color: C.ink2, marginTop: 2 }}>
+              {otHours ? tr(`${otHours} 小時 × HK$${money(payM.otRate)} = HK$${money(payM.ot)}，扣強積金後 +HK$${money(otNet, 2)}`, `${otHours} h × HK$${money(payM.otRate)} = HK$${money(payM.ot)}, +HK$${money(otNet, 2)} after MPF`)
+                : tr(`時薪 HK$${money(payM.otRate)}，輸入時數會加到本月收入`, `HK$${money(payM.otRate)} an hour; hours entered are added to this month's money in`)}
+            </div>
+          </div>
+          <div className="flex items-center gap-1 pb-shrink0">
+            <TextIn type="number" step="0.5" right w={74} value={otHours} onChange={(v) => up((s) => { s.ot = { ...(s.ot || {}), [m]: v }; })} />
+            <span style={{ fontSize: 13, color: C.ink2 }}>{tr("小時", "h")}</span>
+          </div>
+        </div>
+        <div className="flex justify-between mt-3 pt-3" style={{ borderTop: `1px solid ${C.rule}`, fontSize: 13 }}>
+          <span style={{ color: C.ink2 }}>{tr("本月收入", "Money in this month")}</span>
+          <Num value={hk(inflow)} weight={800} />
+        </div>
+      </Card>
 
       {keep > 0 && (
         <Card accent={C.blue}>
@@ -1350,7 +1453,7 @@ function Month({ st, d, up, lang }) {
               ))}
               <tr style={{ background: "#F2F5F1" }}>
                 <td style={{ padding: "9px 10px", fontWeight: 800 }}>{L("Kept")}</td>
-                <td style={{ padding: "9px 10px", textAlign: "right" }}><Num value={money(d.surplus)} weight={500} color={C.ink2} /></td>
+                <td style={{ padding: "9px 10px", textAlign: "right" }}><Num value={hk(d.surplus, 0, "")} weight={500} color={d.surplus < 0 ? C.red : C.ink2} /></td>
                 <td style={{ padding: "9px 10px", textAlign: "right" }} colSpan={2}><Num value={money(net)} size={15} weight={800} color={net < 0 ? C.red : C.jade} /></td>
               </tr>
             </tbody>
@@ -1382,11 +1485,24 @@ function Plan({ st, d, up, lang }) {
               <CcySelect value={r.ccy} onChange={(v) => up((s) => { s.income[i].ccy = v; })} />
               <RemoveBtn onClick={() => up((s) => { s.income.splice(i, 1); })} label={L("Delete")} />
             </div>
+            <label className="flex items-center gap-2 mt-2" style={{ fontSize: 13, color: C.ink2, cursor: "pointer" }}>
+              <input type="checkbox" checked={!!r.mpf} onChange={(e) => up((s) => { s.income[i].mpf = e.target.checked; })} style={{ width: 18, height: 18 }} />
+              {lang === "zh" ? "未扣強積金的薪金（自動扣 5%）" : "Before MPF (deduct 5% automatically)"}
+            </label>
           </div>
         ))}
-        <div className="flex justify-between items-center mt-3">
-          <Btn size="sm" onClick={() => up((s) => { s.income.push({ id: uid(), source: "", amount: 0, ccy: "HKD" }); })}>{L("+ Add income")}</Btn>
-          <Num value={money(d.income)} prefix="HK$" size={17} weight={800} />
+        <Btn size="sm" onClick={() => up((s) => { s.income.push({ id: uid(), source: "", amount: 0, ccy: "HKD", mpf: false }); })}>{L("+ Add income")}</Btn>
+        <table style={{ width: "100%", marginTop: 12, fontSize: 13.5 }}>
+          <tbody>
+            <tr className="pb-row"><td style={{ padding: "5px 0", color: C.ink2 }}>{lang === "zh" ? "總收入" : "Gross"}</td><td style={{ textAlign: "right" }}><Num value={hk(d.pay.gross, 2)} weight={600} /></td></tr>
+            <tr className="pb-row"><td style={{ padding: "5px 0", color: C.ink2 }}>{lang === "zh" ? "強積金（僱員 5%）" : "MPF (your 5%)"}</td><td style={{ textAlign: "right" }}><Num value={hk(-d.pay.mpf, 2)} weight={600} color={C.ink2} /></td></tr>
+            <tr><td style={{ padding: "7px 0", fontWeight: 800 }}>{lang === "zh" ? "每月實收" : "Take-home"}</td><td style={{ textAlign: "right" }}><Num value={hk(d.income, 2)} size={17} weight={800} /></td></tr>
+          </tbody>
+        </table>
+        <div className="flex items-center gap-2 mt-2" style={{ fontSize: 13, color: C.ink2 }}>
+          <span>{lang === "zh" ? "加班時薪 HK$" : "Overtime per hour HK$"}</span>
+          <TextIn type="number" right w={80} value={st.settings.otRate} onChange={(v) => up((s) => { s.settings.otRate = v; })} />
+          <span>{lang === "zh" ? "（每月加班時數在「月度」輸入）" : "(log hours each month on Month)"}</span>
         </div>
       </Card>
 
@@ -1423,7 +1539,7 @@ function Plan({ st, d, up, lang }) {
         <Eyebrow>{L("Does the plan balance?")}</Eyebrow>
         <table style={{ width: "100%", marginTop: 6 }}>
           <tbody style={{ fontSize: 13.5 }}>
-            {[[L("Money in"), d.income, C.jade], [L("Spending"), -d.plannedExp, C.ink], [L("Set aside"), -d.plannedSave, C.gold]].map(([l, v, c]) => (
+            {[[lang === "zh" ? "實收（已扣強積金）" : "Take-home (after MPF)", d.income, C.jade], [L("Spending"), -d.plannedExp, C.ink], [L("Set aside"), -d.plannedSave, C.gold]].map(([l, v, c]) => (
               <tr key={l} className="pb-row"><td style={{ padding: "6px 0", color: C.ink2 }}>{l}</td>
                 <td style={{ textAlign: "right" }}><Num value={hk(v)} color={c} /></td></tr>
             ))}
@@ -2019,6 +2135,234 @@ function Mpf({ st, d, up, lang }) {
           "eMPF needs a password plus an SMS/email code, or iAM Smart, and offers no export or third-party access, so it can't be read automatically. Copying the total from the eMPF app once a quarter is enough; after 90 days without an update, Coming up reminds you. You can also send Claude an eMPF screenshot to fill it in.")}
       </div>
     </Card>
+  );
+}
+
+/* ── LEAVE: annual leave calendar, HK holidays, trips ────────── */
+function Leave({ st, d, up, lang }) {
+  const tr = (zh, en) => (lang === "zh" ? zh : en);
+  const today = todayISO();
+  const [cursor, setCursor] = useState(today.slice(0, 7));
+  const [sel, setSel] = useState(today);
+  const [form, setForm] = useState(null);   // event being added/edited
+  const [editBal, setEditBal] = useState(false);
+  const lv = st.leave || { perYear: 12, days: [] };
+  const year = +cursor.slice(0, 4);
+  const li = leaveInfo(lv, year);
+  const thisYear = new Date().getFullYear();
+  const events = (st.events || []).slice().sort((a, b) => (a.start < b.start ? -1 : 1));
+  const upcoming = events.filter((e) => (e.end || e.start) >= today);
+  const past = events.filter((e) => (e.end || e.start) < today).reverse();
+  const evOn = (date) => events.filter((e) => date >= e.start && date <= (e.end || e.start));
+
+  const [cy, cm] = cursor.split("-").map(Number);
+  const first = new Date(cy, cm - 1, 1);
+  const lead = (first.getDay() + 6) % 7;                     // Monday-first grid
+  const daysIn = new Date(cy, cm, 0).getDate();
+  const cells = [...Array(lead).fill(null), ...Array.from({ length: daysIn }, (_, i) => isoLocal(new Date(cy, cm - 1, i + 1)))];
+  while (cells.length % 7) cells.push(null);
+  const shift = (k) => { const dt = new Date(cy, cm - 1 + k, 1); setCursor(isoLocal(dt).slice(0, 7)); };
+  const monthName = first.toLocaleDateString(lang === "zh" ? "zh-Hant" : "en-GB", { month: "long", year: "numeric" });
+  const holidaysThisMonth = Object.entries(HK_HOLIDAYS).filter(([k]) => k.startsWith(cursor));
+  const knownYear = HOLIDAY_YEARS.includes(year);
+
+  const setLeave = (date, amt) => up((s) => {
+    s.leave ||= { perYear: 12, days: [] };
+    const rest = (s.leave.days || []).filter((x) => x.date !== date);
+    s.leave.days = amt ? [...rest, { date, amt }] : rest;
+  });
+  const bookFor = (ev) => up((s) => {
+    const need = leaveNeeded(s.leave, ev);
+    s.leave.days = [...(s.leave.days || []), ...need.map((date) => ({ date, amt: 1, note: ev.title }))];
+  });
+  const saveEvent = () => {
+    if (!form?.title?.trim() || !form.start) return;
+    const ev = { ...form, end: form.end && form.end >= form.start ? form.end : form.start };
+    up((s) => {
+      s.events ||= [];
+      const i = s.events.findIndex((x) => x.id === ev.id);
+      if (i >= 0) s.events[i] = ev; else s.events.push({ ...ev, id: uid() });
+    });
+    setForm(null);
+  };
+  const fmtRange = (e) => {
+    const a = new Date(e.start + "T00:00:00"), b = new Date((e.end || e.start) + "T00:00:00");
+    const f = (x) => x.toLocaleDateString(lang === "zh" ? "zh-Hant" : "en-GB", { day: "numeric", month: "short", weekday: "short" });
+    return (e.end && e.end !== e.start ? `${f(a)} – ${f(b)}` : f(a)) + (e.time ? ` · ${e.time}` : "");
+  };
+
+  const selHol = HK_HOLIDAYS[sel];
+  const selLeave = leaveOn(lv, sel);
+  const selWork = isWorkday(sel);
+  const selEvents = evOn(sel);
+  const selCounted = sel.slice(0, 4) !== String(lv.anchorDate || "").slice(0, 4) || sel > (lv.anchorDate || "");
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <div className="flex justify-between items-start gap-3">
+          <div style={{ minWidth: 0 }}>
+            <Eyebrow>{tr(`${year} 年假`, `${year} annual leave`)}</Eyebrow>
+            <div className="flex items-baseline gap-2 mt-1">
+              <Num value={li.left % 1 ? li.left.toFixed(1) : li.left} size={30} weight={800} color={li.left < 0 ? C.red : C.jade} />
+              <span style={{ fontSize: 14, color: C.ink2 }}>{tr("日剩餘", li.left === 1 ? "day left" : "days left")}</span>
+            </div>
+          </div>
+          <div className="text-right pb-shrink0" style={{ fontSize: 12.5, color: C.ink2, lineHeight: 1.6 }}>
+            {li.planned > 0 && <div>{tr(`已計劃 ${li.planned} 日`, `${li.planned} planned`)}</div>}
+            {li.taken > 0 && <div>{tr(`已放 ${li.taken} 日`, `${li.taken} taken`)}</div>}
+            <div>{tr(`每年 ${n(lv.perYear) || 12} 日`, `${n(lv.perYear) || 12} a year`)}</div>
+          </div>
+        </div>
+        <div className="mt-3"><Bar2 pct={li.base ? ((li.base - li.left) / li.base) * 100 : 0} h={8} /></div>
+        {year === thisYear && li.left > 0 && (
+          <div style={{ fontSize: 12.5, color: C.ink2, marginTop: 8 }}>
+            {tr(`今年還有 ${daysBetween(today, `${year}-12-31`)} 日。未用的年假能否帶到明年，要看公司規定。`, `${daysBetween(today, `${year}-12-31`)} days left in the year. Whether unused leave carries over depends on your company's policy.`)}
+          </div>
+        )}
+        <div className="mt-2">
+          {!editBal ? (
+            <button className="pb-tab" onClick={() => setEditBal(true)} style={{ background: "none", border: "none", color: C.jade, fontWeight: 700, fontSize: 12.5, padding: 0, cursor: "pointer" }}>
+              {tr("修改年假結餘", "Adjust balance")}
+            </button>
+          ) : (
+            <div className="grid gap-2 mt-1" style={{ gridTemplateColumns: "1fr 1fr 1fr" }}>
+              <Lbl t={tr("每年日數", "Per year")}><TextIn type="number" right value={lv.perYear} onChange={(v) => up((s) => { s.leave.perYear = v; })} /></Lbl>
+              <Lbl t={tr("截至日期", "As of")}><TextIn type="date" value={lv.anchorDate} onChange={(v) => up((s) => { s.leave.anchorDate = v; })} /></Lbl>
+              <Lbl t={tr("當日剩餘", "Days left then")}><TextIn type="number" step="0.5" right value={lv.anchorBalance} onChange={(v) => up((s) => { s.leave.anchorBalance = v; })} /></Lbl>
+            </div>
+          )}
+        </div>
+      </Card>
+
+      <Card pad="p-3">
+        <div className="flex justify-between items-center">
+          <button className="pb-btn" aria-label={tr("上個月", "Previous month")} onClick={() => shift(-1)} style={{ background: "none", border: `1px solid ${C.rule}`, width: 38, color: C.ink, fontSize: 16 }}>‹</button>
+          <button className="pb-tab" onClick={() => { setCursor(today.slice(0, 7)); setSel(today); }} style={{ background: "none", border: "none", fontWeight: 800, fontSize: 16, color: C.ink, cursor: "pointer" }}>{monthName}</button>
+          <button className="pb-btn" aria-label={tr("下個月", "Next month")} onClick={() => shift(1)} style={{ background: "none", border: `1px solid ${C.rule}`, width: 38, color: C.ink, fontSize: 16 }}>›</button>
+        </div>
+        <div className="grid mt-3" style={{ gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 3 }}>
+          {(lang === "zh" ? ["一", "二", "三", "四", "五", "六", "日"] : ["M", "T", "W", "T", "F", "S", "S"]).map((w, i) => (
+            <div key={i} className="text-center" style={{ fontSize: 11.5, color: i >= 5 ? C.red : C.ink2, fontWeight: 600, paddingBottom: 2 }}>{w}</div>
+          ))}
+          {cells.map((date, i) => {
+            if (!date) return <div key={i} />;
+            const hol = HK_HOLIDAYS[date], lvd = leaveOn(lv, date), evs = evOn(date);
+            const wkend = dowOf(date) === 0 || dowOf(date) === 6;
+            const isSel = date === sel, isToday = date === today;
+            const bg = lvd ? (n(lvd.amt) >= 1 ? C.jade : `linear-gradient(135deg, ${C.jade} 50%, ${C.jadeSoft} 50%)`) : isSel ? C.jadeSoft : "transparent";
+            return (
+              <button key={date} onClick={() => setSel(date)} className="pb-tab" aria-label={date + (hol ? " " + hol[lang === "zh" ? 0 : 1] : "") + (lvd ? " leave" : "")}
+                style={{ position: "relative", height: 46, borderRadius: 8, border: isToday ? `2px solid ${C.ink}` : isSel ? `1px solid ${C.jade}` : "1px solid transparent", background: bg, cursor: "pointer", padding: 0,
+                  color: lvd && n(lvd.amt) >= 1 ? "#fff" : hol || wkend ? C.red : C.ink, fontWeight: hol ? 800 : 600, fontSize: 15, fontFamily: MONO }}>
+                {+date.slice(8)}
+                <span style={{ position: "absolute", left: 0, right: 0, bottom: 4, display: "flex", justifyContent: "center", gap: 3 }}>
+                  {hol && <i style={{ width: 5, height: 5, borderRadius: 5, background: C.red }} />}
+                  {evs.some((e) => e.tag === "gf") && <i style={{ width: 5, height: 5, borderRadius: 5, background: "#C2477A" }} />}
+                  {evs.some((e) => e.tag !== "gf") && <i style={{ width: 5, height: 5, borderRadius: 5, background: C.gold }} />}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex gap-3 flex-wrap mt-3" style={{ fontSize: 11.5, color: C.ink2 }}>
+          <span className="flex items-center gap-1"><i style={{ width: 8, height: 8, borderRadius: 8, background: C.red }} />{tr("公眾假期", "Public holiday")}</span>
+          <span className="flex items-center gap-1"><i style={{ width: 12, height: 10, borderRadius: 3, background: C.jade }} />{tr("年假", "Leave")}</span>
+          <span className="flex items-center gap-1"><i style={{ width: 8, height: 8, borderRadius: 8, background: "#C2477A" }} />{tr("與她", "With her")}</span>
+          <span className="flex items-center gap-1"><i style={{ width: 8, height: 8, borderRadius: 8, background: C.gold }} />{tr("其他行程", "Other plans")}</span>
+        </div>
+        {!knownYear && <div style={{ fontSize: 12, color: C.red, marginTop: 6 }}>{tr(`未有 ${year} 年公眾假期資料。`, `No ${year} holiday data yet.`)}</div>}
+        {holidaysThisMonth.length > 0 && (
+          <div className="mt-2" style={{ fontSize: 12.5, color: C.ink2 }}>
+            {holidaysThisMonth.map(([k, v]) => <div key={k}><b style={{ color: C.red, fontFamily: MONO }}>{+k.slice(8)}</b> {v[lang === "zh" ? 0 : 1]}</div>)}
+          </div>
+        )}
+      </Card>
+
+      <Card>
+        <Eyebrow>{new Date(sel + "T00:00:00").toLocaleDateString(lang === "zh" ? "zh-Hant" : "en-GB", { weekday: "long", day: "numeric", month: "long" })}</Eyebrow>
+        <div style={{ fontSize: 13, color: C.ink2, marginTop: 4 }}>
+          {selHol ? <span style={{ color: C.red, fontWeight: 700 }}>{selHol[lang === "zh" ? 0 : 1]}（{tr("公眾假期", "public holiday")}）</span>
+            : !selWork ? tr("週末", "Weekend")
+              : selLeave ? tr(`已請${n(selLeave.amt) >= 1 ? "全日" : "半日"}假${selCounted ? "" : "（已計入你給的結餘）"}`, `${n(selLeave.amt) >= 1 ? "Full" : "Half"}-day leave${selCounted ? "" : " (already in the balance you gave)"}`)
+                : tr("工作日", "Workday")}
+        </div>
+        {selEvents.map((e) => (
+          <div key={e.id} style={{ fontSize: 13.5, marginTop: 6 }}><b style={{ color: e.tag === "gf" ? "#C2477A" : C.gold }}>●</b> {e.title}{e.time && e.start === sel ? ` · ${e.time}` : ""}</div>
+        ))}
+        <div className="flex gap-2 mt-3 flex-wrap">
+          {selWork && (
+            <>
+              <Btn size="sm" tone={selLeave && n(selLeave.amt) >= 1 ? "solid" : "quiet"} onClick={() => setLeave(sel, selLeave && n(selLeave.amt) >= 1 ? 0 : 1)}>{tr("全日假", "Full day")}</Btn>
+              <Btn size="sm" tone={selLeave && n(selLeave.amt) < 1 ? "solid" : "quiet"} onClick={() => setLeave(sel, selLeave && n(selLeave.amt) < 1 ? 0 : 0.5)}>{tr("半日假", "Half day")}</Btn>
+            </>
+          )}
+          <Btn size="sm" onClick={() => setForm({ title: "", start: sel, end: sel, time: "", note: "", tag: "gf" })}>{tr("＋ 新增行程", "+ Add a plan")}</Btn>
+        </div>
+      </Card>
+
+      {form && (
+        <Card accent={C.gold}>
+          <Eyebrow>{form.id ? tr("修改行程", "Edit plan") : tr("新增行程", "New plan")}</Eyebrow>
+          <div className="mt-2"><TextIn value={form.title} placeholder={tr("例如：接機、生日旅行", "e.g. Airport pickup, birthday trip")} onChange={(v) => setForm({ ...form, title: v })} /></div>
+          <div className="grid gap-2 mt-2" style={{ gridTemplateColumns: "1fr 1fr" }}>
+            <Lbl t={tr("開始", "From")}><TextIn type="date" value={form.start} onChange={(v) => setForm({ ...form, start: v, end: form.end < v ? v : form.end })} /></Lbl>
+            <Lbl t={tr("結束", "To")}><TextIn type="date" value={form.end} onChange={(v) => setForm({ ...form, end: v })} /></Lbl>
+            <Lbl t={tr("時間（可選）", "Time (optional)")}><TextIn type="time" value={form.time} onChange={(v) => setForm({ ...form, time: v })} /></Lbl>
+            <Lbl t={tr("類別", "Type")}>
+              <select className="pb-in" style={{ width: "100%" }} value={form.tag} onChange={(e) => setForm({ ...form, tag: e.target.value })}>
+                <option value="gf">{tr("與她", "With her")}</option><option value="other">{tr("其他", "Other")}</option>
+              </select>
+            </Lbl>
+          </div>
+          <div className="mt-2"><TextIn value={form.note} placeholder={tr("地點／備註（可選）", "Place / note (optional)")} onChange={(v) => setForm({ ...form, note: v })} /></div>
+          <div className="flex gap-2 mt-3">
+            <Btn size="sm" tone="solid" onClick={saveEvent}>{tr("儲存", "Save")}</Btn>
+            <Btn size="sm" onClick={() => setForm(null)}>{tr("取消", "Cancel")}</Btn>
+          </div>
+        </Card>
+      )}
+
+      <Card pad="p-0">
+        <div className="p-3" style={{ paddingBottom: 4 }}><Eyebrow>{tr("行程", "Plans")}</Eyebrow></div>
+        {upcoming.length === 0 && <div className="px-3 pb-3" style={{ fontSize: 13, color: C.ink2 }}>{tr("未有行程。在日曆揀一日，再按「新增行程」。", "No plans yet. Pick a day on the calendar, then Add a plan.")}</div>}
+        {upcoming.map((e) => {
+          const need = leaveNeeded(lv, e).filter((x) => x >= today);
+          const yr = +(need[0] || e.start).slice(0, 4);
+          const leftThen = leaveInfo(lv, yr).left;
+          const until = daysBetween(today, e.start);
+          return (
+            <div key={e.id} className="pb-row px-3" style={{ paddingTop: 10, paddingBottom: 12, borderLeft: `3px solid ${e.tag === "gf" ? "#C2477A" : C.gold}` }}>
+              <div className="flex justify-between items-baseline gap-2">
+                <span style={{ fontWeight: 700, fontSize: 14.5 }}>{e.title}</span>
+                <span className="pb-shrink0"><Chip tone={until <= 7 ? "gold" : "grey"}>{until <= 0 ? tr("進行中", "now") : tr(`${until} 日後`, `in ${until}d`)}</Chip></span>
+              </div>
+              <div style={{ fontSize: 12.5, color: C.ink2, marginTop: 2 }}>{fmtRange(e)}{e.note ? ` · ${e.note}` : ""}</div>
+              <div className="flex justify-between items-center gap-2 mt-2 flex-wrap">
+                <span style={{ fontSize: 12.5, color: need.length > leftThen ? C.red : C.ink2 }}>
+                  {need.length ? tr(`需請 ${need.length} 日假（${yr} 年剩 ${leftThen} 日）`, `Needs ${need.length} day${need.length > 1 ? "s" : ""} of leave (${leftThen} left in ${yr})`) : tr("不用請假", "No leave needed")}
+                </span>
+                <span className="flex gap-2">
+                  {need.length > 0 && <Btn size="sm" tone="solid" onClick={() => bookFor({ ...e, start: e.start < today ? today : e.start })}>{tr(`請 ${need.length} 日假`, `Book ${need.length} day${need.length > 1 ? "s" : ""}`)}</Btn>}
+                  <Btn size="sm" onClick={() => { setForm({ time: "", note: "", tag: "gf", ...e }); window.scrollTo?.({ top: 0 }); }}>{tr("修改", "Edit")}</Btn>
+                  <RemoveBtn label={tr("刪除", "Delete")} onClick={() => up((s) => { s.events = (s.events || []).filter((x) => x.id !== e.id); })} />
+                </span>
+              </div>
+            </div>
+          );
+        })}
+        {past.length > 0 && (
+          <div className="px-3 pb-3 pt-2" style={{ fontSize: 12.5, color: C.ink2 }}>
+            {tr("過去：", "Past: ")}{past.slice(0, 3).map((e) => `${e.title}（${fmtRange(e)}）`).join("；")}
+          </div>
+        )}
+      </Card>
+
+      <div style={{ fontSize: 11.5, color: C.ink2, lineHeight: 1.5 }}>
+        {tr("公眾假期即香港銀行假期，資料來自政府公布的 2026 及 2027 年一般假日。星期六日不計年假。",
+          "Public holidays are Hong Kong's general holidays (bank holidays) for 2026 and 2027 as published by the government. Weekends don't use leave.")}
+      </div>
+    </div>
   );
 }
 
