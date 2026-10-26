@@ -1501,6 +1501,7 @@ function Month({ st, d, up, lang }) {
   const rates = st.settings.rates;
   const cur = monthKey(todayISO());
   const [m, setM] = useState(d.months.includes(cur) ? cur : d.months[0] || cur);
+  const [trend, setTrend] = useState("month");
   const [f, setF] = useState({ date: todayISO(), name: "", kind: "expense", amount: 0, ccy: "HKD", note: "", link: "" });
 
   const rows = st.tx.map((t, i) => ({ t, i })).filter((x) => monthKey(x.t.date) === m).sort((a, b) => a.t.date.localeCompare(b.t.date));
@@ -1555,6 +1556,41 @@ function Month({ st, d, up, lang }) {
     });
     return { rows: Object.values(groups).sort((a, b) => b.total - a.total), total };
   })();
+
+  // Daily spending trend (expenses only, HKD).
+  const spendByDay = {};
+  st.tx.forEach((x) => { if (x.kind === "expense") spendByDay[x.date] = (spendByDay[x.date] || 0) + toHKD(x.amount, x.ccy || "HKD", rates); });
+  const dim = (k) => new Date(Number(k.slice(0, 4)), Number(k.slice(5, 7)), 0).getDate();
+  const dkey = (k, day) => `${k}-${String(day).padStart(2, "0")}`;
+  const todayK = todayISO();
+  const dailyRows = (() => {
+    let cum = 0;
+    return Array.from({ length: dim(m) }, (_, i) => { const v = spendByDay[dkey(m, i + 1)] || 0; cum += v; return { d: i + 1, spend: Math.round(v), cum: Math.round(cum) }; });
+  })();
+  const dayTotal = dailyRows.reduce((a, r) => a + r.spend, 0);
+  const elapsedDays = m === monthKey(todayK) ? Number(todayK.slice(8, 10)) : dim(m);
+  const avgDay = elapsedDays ? dayTotal / elapsedDays : 0;
+  const topDay = dailyRows.reduce((best, r) => (r.spend > (best ? best.spend : 0) ? r : best), null);
+  const cmpMonths = [...new Set([cur, ...Object.keys(spendByDay).map((k) => k.slice(0, 7))])].sort().slice(-6);
+  const cmpRows = (() => {
+    const cums = Object.fromEntries(cmpMonths.map((k) => [k, 0]));
+    return Array.from({ length: 31 }, (_, i) => {
+      const row = { d: i + 1 };
+      cmpMonths.forEach((k) => {
+        if (i + 1 > dim(k) || dkey(k, i + 1) > todayK) { row[k] = null; return; }
+        cums[k] += spendByDay[dkey(k, i + 1)] || 0;
+        row[k] = Math.round(cums[k]);
+      });
+      return row;
+    });
+  })();
+  const cmpPal = [C.ink2, C.violet, C.pink, C.gold, C.blue];
+  const cmpPrev = cmpMonths.length > 1 ? cmpMonths[cmpMonths.length - 2] : null;
+  const cmpDay = Math.min(Number(todayK.slice(8, 10)), 31);
+  const cmpNow = cmpRows[cmpDay - 1]?.[cur];
+  const cmpThen = cmpPrev ? cmpRows[cmpDay - 1]?.[cmpPrev] : null;
+  const axisK = (v) => (v >= 1000 ? (v / 1000).toFixed(v % 1000 ? 1 : 0) + "k" : String(v));
+  const tipStyle = { background: C.card, border: `1px solid ${C.rule}`, borderRadius: 8, fontSize: 12, fontFamily: MONO };
 
   const add = () => {
     const plan = st.plans.find((p) => p.id === f.link);
@@ -1721,6 +1757,66 @@ function Month({ st, d, up, lang }) {
               );
             })}
           </div>
+        )}
+      </Card>
+
+      <Card>
+        <div className="flex justify-between items-center gap-2 flex-wrap">
+          <Eyebrow>{tr("每日支出趨勢", "Daily spending trend")}</Eyebrow>
+          <div className="flex gap-1">
+            {[["month", tr("本月每日", "This month")], ["compare", tr("各月對比", "Compare months")]].map(([k, label]) => (
+              <button key={k} className="pb-tab" onClick={() => setTrend(k)}
+                style={{ border: "none", borderRadius: 999, padding: "6px 12px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", background: trend === k ? C.jade : C.chip, color: trend === k ? C.onJade : C.ink }}>{label}</button>
+            ))}
+          </div>
+        </div>
+        {trend === "month" ? (
+          <>
+            <div className="grid mt-3" style={{ gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+              {[[tr("總支出", "Total"), hk(dayTotal, 0)], [tr("每日平均", "Per day"), hk(avgDay, 0)], [tr("最高一日", "Peak day"), topDay && topDay.spend ? `${hk(topDay.spend, 0)} · ${topDay.d}${tr("日", "")}` : "—"]].map(([l, v]) => (
+                <div key={l}>
+                  <div style={{ fontSize: 11.5, color: C.ink2 }}>{l}</div>
+                  <Num value={v} size={14} weight={800} wrap />
+                </div>
+              ))}
+            </div>
+            <div className="mt-3" style={{ height: 180 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={dailyRows} margin={{ top: 4, right: 4, left: -14, bottom: 0 }}>
+                  <CartesianGrid stroke={C.rule} vertical={false} />
+                  <XAxis dataKey="d" ticks={[1, 5, 10, 15, 20, 25, 30]} tick={{ fontSize: 10, fill: C.ink2, fontFamily: MONO }} tickLine={false} axisLine={{ stroke: C.rule }} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 10, fill: C.ink2, fontFamily: MONO }} tickFormatter={axisK} tickLine={false} axisLine={false} />
+                  <Tooltip contentStyle={tipStyle} labelFormatter={(l) => tr(`${monthLabel(m, lang)} ${l} 日`, `${monthLabel(m, lang)} ${l}`)} formatter={(v) => ["HK$" + money(v), tr("支出", "Spent")]} />
+                  <Bar dataKey="spend" fill={C.blue} radius={[3, 3, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 6 }}>{tr(`${monthLabel(m, lang)}每日支出（港元）。換月份請用上面的月份選單。`, `Spending per day in ${monthLabel(m, lang)}, in HKD. Change month with the selector at the top.`)}</div>
+          </>
+        ) : (
+          <>
+            <div className="mt-3" style={{ height: 200 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={cmpRows} margin={{ top: 4, right: 8, left: -14, bottom: 0 }}>
+                  <CartesianGrid stroke={C.rule} vertical={false} />
+                  <XAxis dataKey="d" ticks={[1, 5, 10, 15, 20, 25, 30]} tick={{ fontSize: 10, fill: C.ink2, fontFamily: MONO }} tickLine={false} axisLine={{ stroke: C.rule }} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 10, fill: C.ink2, fontFamily: MONO }} tickFormatter={axisK} tickLine={false} axisLine={false} />
+                  <Tooltip contentStyle={tipStyle} labelFormatter={(l) => tr(`每月 ${l} 日`, `Day ${l}`)} formatter={(v, name) => ["HK$" + money(v), name]} />
+                  {cmpMonths.map((k, i) => {
+                    const last = i === cmpMonths.length - 1;
+                    return <Line key={k} type="monotone" dataKey={k} name={monthLabel(k, lang)} stroke={last ? C.jade : cmpPal[i % cmpPal.length]} strokeWidth={last ? 3 : 1.6} dot={false} connectNulls={false} />;
+                  })}
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            <div style={{ fontSize: 12.5, marginTop: 6 }}>
+              {cmpPrev && cmpNow != null && cmpThen != null
+                ? tr(`到 ${cmpDay} 日為止，本月累計 HK$${money(cmpNow)}，上個月同日 HK$${money(cmpThen)}（${cmpNow - cmpThen >= 0 ? "多" : "少"} HK$${money(Math.abs(cmpNow - cmpThen))}）。`, `By day ${cmpDay} this month is at HK$${money(cmpNow)}, against HK$${money(cmpThen)} last month (${cmpNow - cmpThen >= 0 ? "HK$" + money(cmpNow - cmpThen) + " more" : "HK$" + money(cmpThen - cmpNow) + " less"}).`)
+                : tr("記滿兩個月之後，這裡會比較本月和上月的同日累計。", "Once you have two months logged, this compares this month with last month at the same day.")}
+            </div>
+            <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 4 }}>{tr("每條線是該月到每一日為止的累計支出，線越平越省。", "Each line is that month's running total by day. A flatter line means a slower month.")}</div>
+          </>
         )}
       </Card>
 
