@@ -1,7 +1,8 @@
 html, body, #root { min-height: 100%; margin: 0; }
-body { background: #EAEFE9; }
+body { background: #F2F4F1; }
+@media (prefers-color-scheme: dark) { body { background: #000; } }
 
-.loading { min-height: 100vh; display: grid; place-items: center; font-family: ui-monospace, monospace; color: #4A6058; }
+.loading { min-height: 100vh; display: grid; place-items: center; font-family: -apple-system, system-ui, sans-serif; color: #5B6A62; }
 
 .auth-shell, .error-shell { min-height: 100vh; display: grid; place-items: center; padding: 20px; box-sizing: border-box; background: #EAEFE9; font-family: ui-sans-serif, system-ui, sans-serif; }
 .auth-card { width: min(100%, 390px); padding: 28px; background: #FBFCFA; border: 1px solid #CBD6CD; border-left: 4px solid #0F7A5A; border-radius: 6px; box-shadow: 0 8px 28px rgba(21,36,30,.08); color: #15241E; }
@@ -59,3 +60,21 @@ body { background: #EAEFE9; }
 .space-y-2 > * + * { margin-top: 8px; }
 .space-y-3 > * + * { margin-top: 12px; }
 .space-y-4 > * + * { margin-top: 16px; }
+
+/* Sign-in screen: rounder, and dark when the phone is. */
+.auth-shell, .error-shell { background: #F2F4F1; font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
+.auth-card { border-radius: 28px; border-left-width: 1px; border-color: #E1E8E3; box-shadow: 0 10px 30px rgba(15,26,20,.10); }
+.auth-card input { border-radius: 12px; font-size: 16px; }
+.auth-card button { border-radius: 999px; padding: 12px; }
+.pb-langbar { background: #F2F4F1; }
+.pb-langbtn { border-radius: 999px; }
+@media (prefers-color-scheme: dark) {
+  .auth-shell, .error-shell, .pb-langbar, .loading { background: #000; }
+  .auth-card { background: #141917; border-color: #26302B; color: #EEF4F0; }
+  .auth-card > span, .auth-card label { color: #97A69E; }
+  .auth-card input { background: #1D2421; border-color: #26302B; color: #EEF4F0; }
+  .auth-card > p, .auth-card .switch { color: #3DD597; }
+  .auth-card button { background: #3DD597; color: #03140C; }
+  .auth-card .switch { background: transparent; }
+  .pb-langbtn { background: #141917; color: #EEF4F0; border-color: #26302B; }
+}
