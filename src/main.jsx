@@ -152,14 +152,14 @@ function App() {
 
   return (
     <>
-      <LangToggle lang={lang} onChange={changeLang} />
+      {!session && <LangToggle lang={lang} onChange={changeLang} />}
       {session === undefined ? (
         <main className="loading">{t(lang, "Opening Passbook…")}</main>
       ) : !session ? (
         <Auth lang={lang} />
       ) : (
         <ErrorBoundary lang={lang}>
-          <Passbook lang={lang} onSignOut={() => supabase.auth.signOut()} />
+          <Passbook lang={lang} onSignOut={() => supabase.auth.signOut()} onLang={() => changeLang(lang === "zh" ? "en" : "zh")} />
         </ErrorBoundary>
       )}
     </>

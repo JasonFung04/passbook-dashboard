@@ -151,17 +151,24 @@ function Num({ value, size = 15, weight = 600, color = C.ink, prefix = "", wrap 
     </span>
   );
 }
+// Section title. Sentence case: small caps-tracked labels everywhere made
+// every card shout the same way.
 function Eyebrow({ children, color = C.ink2 }) {
-  return <div style={{ fontSize: 10.5, letterSpacing: "0.14em", textTransform: "uppercase", color, fontWeight: 700 }}>{children}</div>;
+  return <div style={{ fontSize: 13, letterSpacing: 0, color, fontWeight: 700, lineHeight: 1.35 }}>{children}</div>;
 }
-function Card({ children, accent = C.jade, className = "", pad = "p-4" }) {
-  return <div className={`${pad} ${className}`} style={{ background: C.card, border: `1px solid ${C.rule}`, borderLeft: `3px solid ${accent}`, borderRadius: 3 }}>{children}</div>;
+// Only cards that need attention (gold = act soon, red = overdue) carry the
+// thick left stripe; everything else sits quietly on a hairline border.
+function Card({ children, accent, className = "", pad = "p-4" }) {
+  const flag = accent === C.gold || accent === C.red;
+  return <div className={`${pad} ${className}`} style={{ background: C.card, border: `1px solid ${C.rule}`, borderLeft: flag ? `3px solid ${accent}` : `1px solid ${C.rule}`, borderRadius: 6 }}>{children}</div>;
 }
 function Chip({ children, tone = "jade" }) {
   const map = { jade: [C.jadeSoft, C.jade], gold: [C.goldSoft, C.gold], red: [C.redSoft, C.red], grey: ["#E4E9E4", C.ink2], blue: ["#DCE6EC", C.blue] };
   const [bg, fg] = map[tone] || map.grey;
-  return <span style={{ background: bg, color: fg, fontSize: 10, fontWeight: 800, letterSpacing: ".06em", padding: "3px 6px", borderRadius: 2, textTransform: "uppercase", whiteSpace: "nowrap" }}>{children}</span>;
+  return <span style={{ background: bg, color: fg, fontSize: 11, fontWeight: 700, padding: "2px 7px", borderRadius: 10, whiteSpace: "nowrap" }}>{children}</span>;
 }
+// Signed money: "−HK$13,700" rather than "HK$-13,700".
+const hk = (v, dp = 0, sign = "HK$") => `${n(v) < 0 ? "−" : ""}${sign}${money(Math.abs(n(v)), dp)}`;
 function TextIn({ value, onChange, placeholder, type = "text", right = false, w, step }) {
   return (
     <input type={type} step={step} value={value === 0 && type === "number" ? "" : value ?? ""} placeholder={placeholder}
@@ -170,7 +177,7 @@ function TextIn({ value, onChange, placeholder, type = "text", right = false, w,
       style={{ fontFamily: type === "number" ? MONO : "inherit", textAlign: right ? "right" : "left", width: w || "100%", fontVariantNumeric: "tabular-nums" }} />
   );
 }
-function CcySelect({ value, onChange, w = 68 }) {
+function CcySelect({ value, onChange, w = 96 }) {
   return (
     <select className="pb-in" style={{ width: w, fontFamily: MONO }} value={value || "HKD"} onChange={(e) => onChange(e.target.value)}>
       {CCYS.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -186,9 +193,15 @@ function Btn({ children, onClick, tone = "quiet", size = "md" }) {
   }[tone];
   return <button onClick={onClick} className="pb-btn" style={{ ...s, fontSize: size === "sm" ? 11.5 : 13, padding: size === "sm" ? "5px 9px" : "8px 13px" }}>{children}</button>;
 }
+function RemoveBtn({ onClick, label = "Delete" }) {
+  return (
+    <button onClick={onClick} aria-label={label} title={label} className="pb-btn"
+      style={{ flexShrink: 0, width: 38, height: 38, background: "transparent", border: `1px solid ${C.rule}`, color: C.ink2, fontSize: 18, lineHeight: 1 }}>×</button>
+  );
+}
 function Bar2({ pct, color = C.jade, h = 6 }) {
   return (
-    <div style={{ background: "#DFE6DF", height: h, borderRadius: 1, overflow: "hidden" }}>
+    <div style={{ background: "#DFE6DF", height: h, borderRadius: h, overflow: "hidden" }}>
       <div style={{ width: `${Math.max(0, Math.min(100, pct))}%`, height: "100%", background: color, transition: "width .5s ease" }} />
     </div>
   );
@@ -196,7 +209,7 @@ function Bar2({ pct, color = C.jade, h = 6 }) {
 function Lbl({ t: label, children }) {
   return (
     <label style={{ display: "block" }}>
-      <span style={{ fontSize: 10, letterSpacing: ".1em", textTransform: "uppercase", color: C.ink2, fontWeight: 700 }}>{label}</span>
+      <span style={{ fontSize: 12, color: C.ink2, fontWeight: 600 }}>{label}</span>
       <div className="mt-1">{children}</div>
     </label>
   );
@@ -382,9 +395,10 @@ const fxMidOn = (fx, date, ccy) => {
 };
 
 /* ════════════════════════════════════════════════════════════ */
-export default function Passbook({ lang = "zh", onSignOut }) {
+export default function Passbook({ lang = "zh", onSignOut, onLang }) {
   const [st, setSt] = useState(null);
   const [tab, setTab] = useState("overview");
+  const [moreOpen, setMoreOpen] = useState(false);
   const [flash, setFlash] = useState("");
   const first = useRef(true);
   const L = (key) => t(lang, key);
@@ -464,54 +478,59 @@ export default function Passbook({ lang = "zh", onSignOut }) {
 
   if (!st || !d) return <div style={{ padding: 40, fontFamily: MONO, color: C.ink2, background: C.paper }}>{L("Opening Passbook…")}</div>;
 
-  const TABS = [["overview", L("Overview")], ["grow", L("Grow")], ["invest", L("Invest")], ["deposits", L("Deposits")], ["subs", L("Subscriptions")], ["fx", L("FX")], ["month", L("Month")], ["budget", L("Plan")], ["goals", L("Goals")]];
+  const tr = (zh, en) => (lang === "zh" ? zh : en);
+  // Four everyday destinations in the tab bar; the rest live under More.
+  const MAIN = [["overview", L("Overview"), "home"], ["deposits", L("Deposits"), "bank"], ["invest", L("Invest"), "chart"], ["fx", L("FX"), "swap"]];
+  const MORE = [
+    ["subs", L("Subscriptions"), tr("訂閱、合約及保養到期", "Plans, contracts and warranties")],
+    ["goals", L("Goals"), tr("應急錢、婚禮、旅行", "Emergency, wedding, travel")],
+    ["month", L("Month"), tr("記錄收支，對比預算", "Log spending against the budget")],
+    ["budget", L("Plan"), tr("每月收入與預算", "Monthly income and budget")],
+    ["grow", L("Grow"), tr("理財步驟與健康檢查", "Money steps and health check")],
+  ];
+  const title = [...MAIN, ...MORE].find((x) => x[0] === tab)?.[1] || L("Overview");
+  const go = (k) => { setTab(k); setMoreOpen(false); window.scrollTo?.({ top: 0 }); };
 
   return (
     <div className="pb-root" style={{ background: C.paper, color: C.ink, minHeight: "100vh" }}>
       <style>{`
         .pb-root *{box-sizing:border-box}
-        .pb-root{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
-        .pb-in{background:#fff;border:1px solid ${C.rule};border-radius:2px;padding:7px 8px;font-size:13.5px;color:${C.ink};outline:none;min-width:0}
-        .pb-in:focus{border-color:${C.jade};box-shadow:0 0 0 2px ${C.jadeSoft}}
-        .pb-btn{border-radius:2px;font-weight:700;letter-spacing:.02em;cursor:pointer;transition:opacity .15s}
+        .pb-root{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased;line-height:1.45}
+        .pb-in{background:#fff;border:1px solid ${C.rule};border-radius:6px;padding:8px 10px;font-size:14px;color:${C.ink};outline:none;min-width:0}
+        @media (pointer:coarse){.pb-in{font-size:16px}}
+        .pb-in:focus{border-color:${C.jade};box-shadow:0 0 0 3px ${C.jadeSoft}}
+        .pb-btn{border-radius:6px;font-weight:700;cursor:pointer;transition:opacity .15s;min-height:34px}
         .pb-btn:hover{opacity:.82}
         .pb-btn:focus-visible,.pb-tab:focus-visible{outline:2px solid ${C.jade};outline-offset:2px}
         .pb-row{border-bottom:1px solid ${C.rule}}
+        .pb-row:last-child{border-bottom:none}
         .pb-scroll::-webkit-scrollbar{height:6px}
         .pb-scroll::-webkit-scrollbar-thumb{background:${C.rule};border-radius:3px}
         .pb-ellipsis{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+        .pb-clamp2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
         .pb-shrink0{flex-shrink:0}
+        .pb-nav{position:fixed;left:0;right:0;bottom:0;z-index:20;background:rgba(251,252,250,.96);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-top:1px solid ${C.rule};padding:6px 4px calc(6px + env(safe-area-inset-bottom))}
+        .pb-navbtn{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;background:none;border:none;padding:4px 0;font-size:11px;font-weight:600;cursor:pointer;min-height:44px}
+        .pb-sheet-bg{position:fixed;inset:0;z-index:30;background:rgba(21,36,30,.35)}
+        .pb-sheet{position:fixed;left:0;right:0;bottom:0;z-index:31;background:${C.card};border-radius:14px 14px 0 0;padding:8px 16px calc(16px + env(safe-area-inset-bottom));max-width:780px;margin:0 auto;box-shadow:0 -8px 30px rgba(21,36,30,.18)}
         @media (prefers-reduced-motion:reduce){.pb-root *{transition:none!important}}
       `}</style>
 
-      <header style={{ background: C.ink, color: "#EAEFE9", padding: "16px 16px 0" }}>
-        <div className="flex items-baseline justify-between gap-3">
-          <div className="pb-ellipsis" style={{ flex: "1 1 auto" }}>
-            <div className="pb-ellipsis" style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.03em" }}>{L("Passbook")}</div>
-            <div className="pb-ellipsis" style={{ fontSize: 11, color: "#8CA79B", letterSpacing: ".1em", textTransform: "uppercase", fontWeight: 700 }}>{L("Money · Deposits · P&L · Growth")}</div>
+      <header style={{ background: C.ink, color: "#EAEFE9", padding: "calc(14px + env(safe-area-inset-top)) 16px 14px" }}>
+        <div className="flex items-end justify-between gap-3" style={{ maxWidth: 780, margin: "0 auto" }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 12, color: "#8CA79B", fontWeight: 600 }}>{L("Passbook")}</div>
+            <div className="pb-ellipsis" style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em" }}>{title}</div>
           </div>
           <div className="text-right pb-shrink0">
-            <Num value={money(d.netWorth)} prefix="HK$" size={19} weight={800} color="#7FD8AE" wrap />
-            <div style={{ fontFamily: MONO, fontSize: 10.5, color: flash ? "#7FD8AE" : "#67827A" }}>{flash || L("net worth")}</div>
-            {onSignOut && (
-              <button onClick={onSignOut} className="pb-tab" style={{ marginTop: 6, background: "transparent", border: `1px solid #3C554C`, color: "#9FB6AC", borderRadius: 3, padding: "3px 8px", fontSize: 10.5, fontWeight: 700, cursor: "pointer" }}>
-                {L("Sign out")}
-              </button>
-            )}
+            <div style={{ fontSize: 11.5, color: flash ? "#7FD8AE" : "#8CA79B", fontWeight: 600 }}>{flash || L("net worth")}</div>
+            <Num value={money(d.netWorth)} prefix="HK$" size={19} weight={800} color="#7FD8AE" />
           </div>
         </div>
-        <nav className="flex gap-1 mt-4 pb-scroll" style={{ overflowX: "auto" }}>
-          {TABS.map(([k, label]) => (
-            <button key={k} onClick={() => setTab(k)} className="pb-tab"
-              style={{ background: tab === k ? C.paper : "transparent", color: tab === k ? C.ink : "#9FB6AC", border: "none", borderRadius: "3px 3px 0 0", padding: "9px 14px", fontSize: 12.5, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" }}>
-              {label}
-            </button>
-          ))}
-        </nav>
       </header>
 
-      <main className="p-4 space-y-4" style={{ maxWidth: 780, margin: "0 auto" }}>
-        {tab === "overview" && <Overview st={st} d={d} go={setTab} lang={lang} />}
+      <main className="p-4 space-y-4" style={{ maxWidth: 780, margin: "0 auto", paddingBottom: "calc(96px + env(safe-area-inset-bottom))" }}>
+        {tab === "overview" && <Overview st={st} d={d} go={go} lang={lang} />}
         {tab === "grow" && <Grow st={st} d={d} up={up} lang={lang} />}
         {tab === "deposits" && <Deposits st={st} d={d} up={up} lang={lang} />}
         {tab === "subs" && <Subs st={st} d={d} up={up} lang={lang} />}
@@ -521,21 +540,78 @@ export default function Passbook({ lang = "zh", onSignOut }) {
         {tab === "budget" && <Plan st={st} d={d} up={up} lang={lang} />}
         {tab === "goals" && <Goals st={st} d={d} up={up} lang={lang} />}
 
-        <div className="flex items-center justify-between pt-2 gap-3" style={{ borderTop: `1px solid ${C.rule}` }}>
-          <span style={{ fontSize: 11, color: C.ink2 }}>{L("Synced to your account in the cloud. Rules of thumb, not licensed advice.")}</span>
-          <Btn size="sm" tone="danger" onClick={() => { if (confirm(L("Reset every figure back to the starting sheet?"))) setSt(structuredClone(SEED)); }}>{L("Reset")}</Btn>
+        <div className="pt-3" style={{ borderTop: `1px solid ${C.rule}`, fontSize: 11.5, color: C.ink2 }}>
+          {L("Synced to your account in the cloud. Rules of thumb, not licensed advice.")}
         </div>
       </main>
+
+      <nav className="pb-nav" aria-label={tr("主要分頁", "Main sections")}>
+        <div className="flex" style={{ maxWidth: 520, margin: "0 auto" }}>
+          {MAIN.map(([k, label, icon]) => (
+            <button key={k} className="pb-navbtn pb-tab" onClick={() => go(k)} aria-current={tab === k ? "page" : undefined}
+              style={{ color: tab === k ? C.jade : C.ink2 }}>
+              <NavIcon name={icon} /><span>{label}</span>
+            </button>
+          ))}
+          <button className="pb-navbtn pb-tab" onClick={() => setMoreOpen(true)} aria-haspopup="dialog"
+            style={{ color: MORE.some((x) => x[0] === tab) || moreOpen ? C.jade : C.ink2 }}>
+            <NavIcon name="more" /><span>{tr("更多", "More")}</span>
+          </button>
+        </div>
+      </nav>
+
+      {moreOpen && (
+        <>
+          <div className="pb-sheet-bg" onClick={() => setMoreOpen(false)} />
+          <div className="pb-sheet" role="dialog" aria-modal="true" aria-label={tr("更多", "More")}>
+            <div style={{ width: 36, height: 4, borderRadius: 2, background: C.rule, margin: "0 auto 10px" }} />
+            {MORE.map(([k, label, desc]) => (
+              <button key={k} className="pb-tab pb-row" onClick={() => go(k)}
+                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", background: "none", border: "none", borderBottom: `1px solid ${C.rule}`, padding: "12px 2px", textAlign: "left", cursor: "pointer", color: C.ink }}>
+                <span>
+                  <span style={{ display: "block", fontSize: 15.5, fontWeight: tab === k ? 800 : 600, color: tab === k ? C.jade : C.ink }}>{label}</span>
+                  <span style={{ display: "block", fontSize: 12.5, color: C.ink2 }}>{desc}</span>
+                </span>
+                {k === "subs" && d.dueSubs.length > 0 && <Chip tone="gold">{d.dueSubs.length}</Chip>}
+              </button>
+            ))}
+            <div className="flex gap-2 mt-3 flex-wrap items-center">
+              {onLang && <Btn size="sm" onClick={() => { onLang(); setMoreOpen(false); }}>{lang === "zh" ? "English" : "繁體中文"}</Btn>}
+              {onSignOut && <Btn size="sm" onClick={onSignOut}>{L("Sign out")}</Btn>}
+              <button className="pb-tab" onClick={() => { if (confirm(L("Reset every figure back to the starting sheet?"))) { setSt(structuredClone(SEED)); setMoreOpen(false); } }}
+                style={{ marginLeft: "auto", background: "none", border: "none", color: C.red, fontSize: 12.5, cursor: "pointer", padding: 8 }}>
+                {tr("清除所有資料", "Erase all data")}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </div>
+  );
+}
+
+// Simple 1.6px-stroke glyphs for the tab bar.
+function NavIcon({ name }) {
+  const p = {
+    home: "M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4.5v-6h-5v6H5a1 1 0 0 1-1-1z",
+    bank: "M3 9.5 12 4l9 5.5M5 10v8M9.5 10v8M14.5 10v8M19 10v8M3 20.5h18",
+    chart: "M4 19h16M5 15l4.5-4.5 3.5 3L19 7.5M15 7.5h4v4",
+    swap: "M7 7h12l-3.5-3.5M17 17H5l3.5 3.5",
+    more: "M5 12h.01M12 12h.01M19 12h.01",
+  }[name];
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={name === "more" ? 3 : 1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={p} />
+    </svg>
   );
 }
 
 /* ── OVERVIEW ────────────────────────────────────────────────── */
 function Stat({ label, v, accent, sub, prefix = "HK$" }) {
   return (
-    <Card accent={accent} pad="p-3">
+    <Card pad="p-3">
       <Eyebrow>{label}</Eyebrow>
-      <div className="mt-1"><Num value={money(v)} prefix={prefix} size={18} weight={800} color={accent === C.ink2 ? C.ink : accent} wrap /></div>
+      <div className="mt-1"><Num value={typeof v === "string" ? v : money(v)} prefix={prefix} size={18} weight={800} color={accent === C.ink2 || !accent ? C.ink : accent} wrap /></div>
       {sub && <div style={{ fontSize: 11, color: C.ink2, marginTop: 2 }}>{sub}</div>}
     </Card>
   );
@@ -544,7 +620,6 @@ function Stat({ label, v, accent, sub, prefix = "HK$" }) {
 function Overview({ st, d, go, lang }) {
   const L = (key) => t(lang, key);
   const tr = (zh, en) => (lang === "zh" ? zh : en);
-  const nm = d.nextManual;
   const traj = useMemo(() => {
     const rows = [];
     for (let i = 0; i <= 24; i++) {
@@ -560,36 +635,12 @@ function Overview({ st, d, go, lang }) {
 
   return (
     <div className="space-y-4">
-      {nm && (
-        <Card accent={nm.i.status === "running" ? C.gold : C.red}>
-          <div className="flex items-start justify-between gap-3">
-            <div style={{ minWidth: 0 }}>
-              <Eyebrow color={nm.i.status === "running" ? C.gold : C.red}>{L("Next manual re-deposit")}</Eyebrow>
-              <div className="mt-1" style={{ fontSize: 16, fontWeight: 800, overflowWrap: "anywhere" }}>{nm.bank} · {nm.product} · {nm.ccy}</div>
-              <div style={{ fontSize: 12.5, color: C.ink2, marginTop: 2, overflowWrap: "anywhere" }}>
-                {fmtDate(nm.i.maturity, lang)} · {ccySign(nm.ccy)}{money(nm.i.atMaturity, 2)} {tr("到期歸還", "comes back")}
-              </div>
-            </div>
-            <div className="text-right pb-shrink0">
-              <Num value={Math.abs(nm.i.left) || 0} size={30} weight={800} color={nm.i.left <= 0 ? C.red : C.gold} />
-              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: C.ink2 }}>{nm.i.left <= 0 ? L("days idle") : L("days left")}</div>
-            </div>
-          </div>
-          <div className="mt-3"><Bar2 pct={nm.i.pct} color={nm.i.left <= 0 ? C.red : C.gold} h={7} /></div>
-          {d.idle > 0 && (
-            <div className="mt-3" style={{ fontSize: 12.5, color: C.red, fontWeight: 700 }}>
-              {tr(`HK$${money(d.idle)} 已到期但未有再存放，接近沒有利息。今天就重新安排。`, `HK$${money(d.idle)} has matured and is earning close to nothing. Place it again today.`)}
-            </div>
-          )}
-        </Card>
-      )}
-
       <ComingUp d={d} go={go} lang={lang} />
       <div className="grid grid-cols-2 gap-3">
         <Stat label={L("On deposit")} v={d.depHKD} accent={C.jade} sub={tr(`${d.live.length} 筆 · ${d.banks.length} 間銀行`, `${d.live.length} live · ${d.banks.length} banks`)} />
-        <Stat label={L("Blended yield")} v={d.blended.toFixed(2)} prefix="" accent={C.gold} sub={L("% a year, weighted")} />
+        <Stat label={L("Blended yield")} v={`${d.blended.toFixed(2)}%`} prefix="" accent={C.gold} sub={lang === "zh" ? "按金額加權" : "weighted by amount"} />
         <Stat label={L("Invested")} v={d.investedHKD} accent={d.investedHKD ? C.blue : C.red}
-          sub={d.inv.snap ? tr(`回報 ${d.inv.pnlPct >= 0 ? "+" : ""}${d.inv.pnlPct.toFixed(2)}%`, `return ${d.inv.pnlPct >= 0 ? "+" : ""}${d.inv.pnlPct.toFixed(2)}%`) : d.investedHKD ? L("market value") : L("nothing compounding yet")} />
+          sub={d.inv.snap ? tr(`回報 ${d.inv.pnlPct >= 0 ? "+" : "−"}${Math.abs(d.inv.pnlPct).toFixed(2)}%`, `return ${d.inv.pnlPct >= 0 ? "+" : "−"}${Math.abs(d.inv.pnlPct).toFixed(2)}%`) : d.investedHKD ? L("market value") : L("nothing compounding yet")} />
         <Stat label={L("Kept per month")} v={d.plannedSave} accent={C.jade} sub={tr(`收入的 ${d.income ? ((d.plannedSave / d.income) * 100).toFixed(0) : 0}%`, `${d.income ? ((d.plannedSave / d.income) * 100).toFixed(0) : 0}% of income`)} />
       </div>
 
@@ -604,7 +655,7 @@ function Overview({ st, d, go, lang }) {
         </div>
       </Card>
 
-      <Card accent={C.gold}>
+      <Card>
         <Eyebrow>{L("Savings line")}</Eyebrow>
         <div style={{ fontSize: 11.5, color: C.ink2, margin: "2px 0 8px" }}>
           {L("Goal progress carried forward 24 months.")}{d.avgSave ? L("Dashed line is your actual pace from the ledger.") : ""}
@@ -626,8 +677,7 @@ function Overview({ st, d, go, lang }) {
       </Card>
 
       <div className="flex gap-2 flex-wrap">
-        <Btn tone="solid" onClick={() => go("grow")}>{L("What to do next")}</Btn>
-        <Btn onClick={() => go("deposits")}>{L("Deposits")}</Btn>
+        <Btn onClick={() => go("grow")}>{L("What to do next")}</Btn>
         <Btn onClick={() => go("month")}>{L("Log an entry")}</Btn>
       </div>
     </div>
@@ -637,11 +687,14 @@ function Overview({ st, d, go, lang }) {
 /* ── COMING UP: deposits and subscriptions that need a decision ── */
 function ComingUp({ d, go, lang }) {
   const tr = (zh, en) => (lang === "zh" ? zh : en);
+  const [open, setOpen] = useState(null);
+  const [all, setAll] = useState(false);
   const rows = [
     ...d.dueDeps.map((x) => ({
       id: x.id, tab: "deposits", date: x.i.maturity, left: x.i.left,
       title: `${x.bank} · ${ccySign(x.ccy)}${money(x.principal)} ${tr("定存", "deposit")}`,
-      what: depPlan(x, lang) + (bestLine(d.bankRates, x.ccy, lang) ? "\n" + bestLine(d.bankRates, x.ccy, lang) : ""), late: x.i.left <= 0,
+      what: depPlan(x, lang), late: x.i.left <= 0,
+      extra: (() => { const b = bestFor(d.bankRates, x.ccy); return b ? tr(`今日最高：${b.bank} ${b.months} 個月 ${n(b.rate).toFixed(2)}%`, `Best today: ${b.bank} ${b.months}M at ${n(b.rate).toFixed(2)}%`) : null; })(),
     })),
     ...(d.mpf.stale || d.mpf.empty ? [{
       id: "mpf", tab: "invest",
@@ -667,23 +720,48 @@ function ComingUp({ d, go, lang }) {
     })()] : []),
   ].sort((a, b) => a.left - b.left);
   if (!rows.length) return null;
+  const tabName = { deposits: tr("定存", "Deposits"), invest: tr("投資", "Invest"), subs: tr("訂閱", "Subscriptions") };
+  const shown = all ? rows : rows.slice(0, 3);
   return (
-    <Card accent={C.gold}>
-      <Eyebrow color={C.gold}>{tr("即將要處理", "Coming up")}</Eyebrow>
-      <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 2 }}>
-        {tr(`${DUE_DAYS} 日內到期的定存，以及到了提醒時間的訂閱`, `Deposits maturing within ${DUE_DAYS} days, and subscriptions inside their reminder window`)}
+    <Card accent={rows.some((r) => r.late) ? C.red : C.gold}>
+      <div className="flex justify-between items-baseline gap-2">
+        <Eyebrow color={C.ink}>{tr("即將要處理", "Coming up")}</Eyebrow>
+        <span style={{ fontSize: 12, color: C.ink2 }}>{tr(`${rows.length} 項`, `${rows.length} item${rows.length > 1 ? "s" : ""}`)}</span>
       </div>
-      {rows.map((r) => (
-        <button key={r.id} onClick={() => go(r.tab)} className="pb-tab pb-row"
-          style={{ display: "block", width: "100%", background: "none", border: "none", borderBottom: `1px solid ${C.rule}`, padding: "10px 0", textAlign: "left", cursor: "pointer", color: C.ink }}>
-          <div className="flex justify-between items-baseline gap-2">
-            <span className="pb-ellipsis" style={{ fontWeight: 800, fontSize: 13.5, flex: "1 1 auto" }}>{r.title}</span>
-            <span className="pb-shrink0"><Chip tone={r.late ? "red" : "gold"}>{r.left <= 0 ? (r.left === 0 ? tr("今日", "today") : tr(`過了 ${-r.left} 日`, `${-r.left}d ago`)) : `${r.left}${tr("日", "d")}`}</Chip></span>
-          </div>
-          <div style={{ fontSize: 11.5, color: C.ink2, fontFamily: MONO, marginTop: 2 }}>{fmtDate(r.date, lang)}</div>
-          <div style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 4, whiteSpace: "pre-line" }}>{r.what}</div>
+      {d.idle > 0 && (
+        <div style={{ fontSize: 12.5, color: C.red, fontWeight: 600, marginTop: 4 }}>
+          {tr(`有 HK$${money(d.idle)} 已到期未再存放，正在少賺利息。`, `HK$${money(d.idle)} has matured and isn't placed yet, so it's earning little.`)}
+        </div>
+      )}
+      <div className="mt-1">
+        {shown.map((r) => {
+          const isOpen = open === r.id;
+          return (
+            <div key={r.id} className="pb-row">
+              <button onClick={() => setOpen(isOpen ? null : r.id)} className="pb-tab" aria-expanded={isOpen}
+                style={{ display: "block", width: "100%", background: "none", border: "none", padding: "11px 0", textAlign: "left", cursor: "pointer", color: C.ink }}>
+                <div className="flex justify-between items-center gap-2">
+                  <span className="pb-ellipsis" style={{ fontWeight: 700, fontSize: 14.5, flex: "1 1 auto" }}>{r.title}</span>
+                  <span className="pb-shrink0"><Chip tone={r.late ? "red" : "gold"}>{r.left <= 0 ? (r.left === 0 ? tr("今日", "today") : tr(`過了 ${-r.left} 日`, `${-r.left}d ago`)) : tr(`${r.left} 日後`, `in ${r.left}d`)}</Chip></span>
+                </div>
+                <div className={isOpen ? "" : "pb-clamp2"} style={{ fontSize: 13, lineHeight: 1.5, marginTop: 3, color: C.ink2, whiteSpace: "pre-line" }}>{r.what}</div>
+              </button>
+              {isOpen && (
+                <div className="flex justify-between items-center gap-2" style={{ paddingBottom: 11 }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: C.jade }}>{r.extra || ""}</span>
+                  <Btn size="sm" onClick={() => go(r.tab)}>{tr(`前往${tabName[r.tab] || ""}`, `Open ${tabName[r.tab] || ""}`)}</Btn>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {rows.length > 3 && (
+        <button className="pb-tab" onClick={() => setAll(!all)}
+          style={{ background: "none", border: "none", color: C.jade, fontWeight: 700, fontSize: 13, padding: "8px 0 0", cursor: "pointer" }}>
+          {all ? tr("收起", "Show fewer") : tr(`顯示全部 ${rows.length} 項`, `Show all ${rows.length}`)}
         </button>
-      ))}
+      )}
     </Card>
   );
 }
@@ -862,8 +940,8 @@ function Grow({ st, d, up, lang }) {
         </ol>
       </Card>
 
-      <Card accent={C.gold}>
-        <Eyebrow color={C.gold}>{L("What acceleration actually looks like")}</Eyebrow>
+      <Card>
+        <Eyebrow>{L("What acceleration actually looks like")}</Eyebrow>
         <div style={{ fontSize: 12.5, color: C.ink2, margin: "3px 0 8px" }}>
           {tr(`同樣每月 HK$${money(monthlySave)}，兩個去處：全部放在定存，以你的平均 ${d.blended.toFixed(2)}% 計算；或是先補滿預備金，再以 ${invRate}% 投資環球指數基金。`, `The same HK$${money(monthlySave)} a month, two destinations: everything in deposits at your blended ${d.blended.toFixed(2)}%, or cushion first and then a world index fund at ${invRate}%.`)}
         </div>
@@ -985,16 +1063,6 @@ function Deposits({ st, d, up, lang }) {
         <div className="flex justify-between items-center gap-2">
           <Eyebrow color={C.blue}>{L("Maturity ladder · next 12 months")}</Eyebrow>
         </div>
-        <div className="flex items-center gap-3 flex-wrap mt-2">
-          <div className="flex items-center gap-1">
-            <span style={{ fontSize: 11, color: C.ink2 }}>{tr("美元 US$1 =", "US$1 =")}</span>
-            <TextIn type="number" step="0.01" right w={62} value={st.settings.rates.USD} onChange={(v) => up((s) => { s.settings.rates.USD = v; })} />
-          </div>
-          <div className="flex items-center gap-1">
-            <span style={{ fontSize: 11, color: C.ink2 }}>{tr("人民幣 ¥1 =", "CNY ¥1 =")}</span>
-            <TextIn type="number" step="0.01" right w={62} value={st.settings.rates.CNY} onChange={(v) => up((s) => { s.settings.rates.CNY = v; })} />
-          </div>
-        </div>
         <div className="mt-3" style={{ height: 190 }}>
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={ladder.rows} margin={{ top: 4, right: 4, left: -14, bottom: 0 }}>
@@ -1050,7 +1118,6 @@ function Deposits({ st, d, up, lang }) {
                 {!x.autoRenew && (x.i.status === "due" || x.i.status === "matured") && (
                   <div style={{ marginTop: 8, padding: "7px 9px", background: x.i.status === "matured" ? C.redSoft : C.goldSoft, borderRadius: 2, fontSize: 12, lineHeight: 1.5, color: C.ink, whiteSpace: "pre-line" }}>
                     <b style={{ color: x.i.status === "matured" ? C.red : C.gold }}>{tr("到期安排：", "At maturity: ")}</b>{depPlan(x, lang)}
-                    {bestLine(d.bankRates, x.ccy, lang) && <div style={{ marginTop: 4, fontWeight: 700 }}>{bestLine(d.bankRates, x.ccy, lang)}</div>}
                   </div>
                 )}
               </button>
@@ -1154,8 +1221,6 @@ function Month({ st, d, up, lang }) {
     return { name: b.name, group: b.group, budget: toHKD(b.amount, b.ccy || "HKD", rates), actual: a, diff: toHKD(b.amount, b.ccy || "HKD", rates) - a };
   });
   Object.entries(byName).forEach(([k, v]) => pnl.push({ name: k, group: "Unplanned", budget: 0, actual: v, diff: -v }));
-  const chart = pnl.filter((r) => r.budget || r.actual).slice(0, 12)
-    .map((r) => ({ name: r.name.length > 11 ? r.name.slice(0, 10) + "…" : r.name, Plan: r.budget, Actual: r.actual }));
 
   const gapToEmergency = Math.max(0, d.emergencyTarget - d.depHKD);
   const keep = Math.max(0, net);
@@ -1208,12 +1273,12 @@ function Month({ st, d, up, lang }) {
           <select className="pb-in" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })}>
             <option value="expense">{L("Spent")}</option><option value="saving">{L("Set aside")}</option><option value="income">{L("Extra money in")}</option>
           </select>
-          <input className="pb-in" list="cats" placeholder={L("Category")} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
-          <datalist id="cats">{st.budget.map((b) => <option key={b.id} value={b.name} />)}</datalist>
-          <div className="flex gap-2">
-            <TextIn type="number" right placeholder="0" value={f.amount} onChange={(v) => setF({ ...f, amount: v })} />
-            <CcySelect value={f.ccy} onChange={(v) => setF({ ...f, ccy: v })} w={64} />
-          </div>
+        </div>
+        <input className="pb-in mt-2" style={{ width: "100%" }} list="cats" placeholder={L("Category")} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
+        <datalist id="cats">{st.budget.map((b) => <option key={b.id} value={b.name} />)}</datalist>
+        <div className="flex gap-2 mt-2">
+          <TextIn type="number" right placeholder="0" value={f.amount} onChange={(v) => setF({ ...f, amount: v })} />
+          <CcySelect value={f.ccy} onChange={(v) => setF({ ...f, ccy: v })} />
         </div>
         <div className="flex gap-2 mt-2">
           <input className="pb-in" style={{ flex: 1 }} placeholder={L("Note (optional)")} value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} />
@@ -1235,7 +1300,7 @@ function Month({ st, d, up, lang }) {
             <table style={{ width: "100%", minWidth: 460, fontSize: 13 }}>
               <thead><tr style={{ background: "#F2F5F1" }}>
                 {[L("Date"), L("Category"), L("Amount"), L("Balance"), ""].map((h, i) => (
-                  <th key={i} style={{ padding: "7px 10px", textAlign: i >= 2 && i < 4 ? "right" : "left", fontSize: 10.5, letterSpacing: ".1em", textTransform: "uppercase", color: C.ink2 }}>{h}</th>
+                  <th key={i} style={{ padding: "7px 10px", textAlign: i >= 2 && i < 4 ? "right" : "left", fontSize: 10.5, letterSpacing: 0, color: C.ink2 }}>{h}</th>
                 ))}
               </tr></thead>
               <tbody>
@@ -1261,13 +1326,13 @@ function Month({ st, d, up, lang }) {
         )}
       </Card>
 
-      <Card accent={C.gold} pad="p-0">
+      <Card pad="p-0">
         <div className="p-3"><Eyebrow>{L("Plan against actual")}</Eyebrow></div>
         <div className="pb-scroll" style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", minWidth: 420, fontSize: 13 }}>
             <thead><tr style={{ background: "#F2F5F1" }}>
               {[L("Category"), L("Budget"), L("Actual"), L("Diff")].map((h, i) => (
-                <th key={i} style={{ padding: "7px 10px", textAlign: i ? "right" : "left", fontSize: 10.5, letterSpacing: ".1em", textTransform: "uppercase", color: C.ink2 }}>{h}</th>
+                <th key={i} style={{ padding: "7px 10px", textAlign: i ? "right" : "left", fontSize: 10.5, letterSpacing: 0, color: C.ink2 }}>{h}</th>
               ))}
             </tr></thead>
             <tbody>
@@ -1280,7 +1345,7 @@ function Month({ st, d, up, lang }) {
                   </td>
                   <td style={{ padding: "7px 10px", textAlign: "right" }}><Num value={money(r.budget)} weight={500} color={C.ink2} /></td>
                   <td style={{ padding: "7px 10px", textAlign: "right" }}><Num value={money(r.actual)} /></td>
-                  <td style={{ padding: "7px 10px", textAlign: "right" }}><Num value={(r.diff >= 0 ? "+" : "") + money(r.diff)} color={r.diff < 0 ? C.red : C.jade} weight={700} /></td>
+                  <td style={{ padding: "7px 10px", textAlign: "right" }}><Num value={(r.diff > 0 ? "+" : "") + hk(r.diff, 0, "")} color={r.diff < 0 ? C.red : C.jade} weight={700} /></td>
                 </tr>
               ))}
               <tr style={{ background: "#F2F5F1" }}>
@@ -1291,20 +1356,6 @@ function Month({ st, d, up, lang }) {
             </tbody>
           </table>
         </div>
-        {chart.length > 0 && (
-          <div className="p-3" style={{ height: 230 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chart} margin={{ top: 4, right: 4, left: -18, bottom: 24 }}>
-                <CartesianGrid stroke={C.rule} vertical={false} />
-                <XAxis dataKey="name" tick={{ fontSize: 9.5, fill: C.ink2 }} angle={-35} textAnchor="end" interval={0} tickLine={false} axisLine={{ stroke: C.rule }} />
-                <YAxis tick={{ fontSize: 10, fill: C.ink2, fontFamily: MONO }} tickLine={false} axisLine={false} />
-                <Tooltip contentStyle={{ background: C.card, border: `1px solid ${C.rule}`, borderRadius: 2, fontSize: 12, fontFamily: MONO }} formatter={(v) => "HK$" + money(v)} />
-                <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Bar dataKey="Plan" name={L("Budget")} fill={C.rule} /><Bar dataKey="Actual" name={L("Actual")} fill={C.jade} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        )}
       </Card>
     </div>
   );
@@ -1324,11 +1375,13 @@ function Plan({ st, d, up, lang }) {
       <Card>
         <Eyebrow>{L("Money in each month")}</Eyebrow>
         {st.income.map((r, i) => (
-          <div key={r.id} className="flex gap-2 mt-2">
+          <div key={r.id} className="mt-2 pb-row" style={{ paddingBottom: 10 }}>
             <TextIn value={r.source} onChange={(v) => up((s) => { s.income[i].source = v; })} placeholder={L("Source")} />
-            <TextIn type="number" right w={110} value={r.amount} onChange={(v) => up((s) => { s.income[i].amount = v; })} />
-            <CcySelect value={r.ccy} onChange={(v) => up((s) => { s.income[i].ccy = v; })} />
-            <Btn size="sm" tone="danger" onClick={() => up((s) => { s.income.splice(i, 1); })}>×</Btn>
+            <div className="flex gap-2 mt-2 items-center">
+              <TextIn type="number" right value={r.amount} onChange={(v) => up((s) => { s.income[i].amount = v; })} />
+              <CcySelect value={r.ccy} onChange={(v) => up((s) => { s.income[i].ccy = v; })} />
+              <RemoveBtn onClick={() => up((s) => { s.income.splice(i, 1); })} label={L("Delete")} />
+            </div>
           </div>
         ))}
         <div className="flex justify-between items-center mt-3">
@@ -1341,22 +1394,23 @@ function Plan({ st, d, up, lang }) {
         const rows = st.budget.map((b, i) => ({ b, i })).filter((x) => x.b.group === g);
         const sum = rows.reduce((a, x) => a + toHKD(x.b.amount, x.b.ccy || "HKD", rates), 0);
         return (
-          <Card key={g} accent={g === "Savings" ? C.gold : C.jade}>
+          <Card key={g}>
             <div className="flex justify-between items-baseline">
               <Eyebrow color={g === "Savings" ? C.gold : C.ink2}>{label}</Eyebrow>
               <Num value={money(sum)} prefix="HK$" size={15} weight={800} />
             </div>
             <div className="mt-2 space-y-2">
               {rows.map(({ b, i }) => (
-                <div key={b.id} className="grid gap-2" style={{ gridTemplateColumns: "1fr 96px 68px 34px" }}>
-                  <div>
+                <div key={b.id} className="pb-row" style={{ paddingBottom: 10 }}>
+                  <div className="grid gap-2" style={{ gridTemplateColumns: "1fr 1fr" }}>
                     <TextIn value={b.name} onChange={(v) => up((s) => { s.budget[i].name = v; })} placeholder={L("Category")} />
-                    <input className="pb-in mt-1" style={{ width: "100%", fontSize: 11.5, color: C.ink2, padding: "4px 8px" }} value={b.note || ""} placeholder={L("Note")}
-                      onChange={(e) => up((s) => { s.budget[i].note = e.target.value; })} />
+                    <TextIn value={b.note || ""} onChange={(v) => up((s) => { s.budget[i].note = v; })} placeholder={L("Note")} />
                   </div>
-                  <TextIn type="number" right value={b.amount} onChange={(v) => up((s) => { s.budget[i].amount = v; })} />
-                  <CcySelect value={b.ccy} onChange={(v) => up((s) => { s.budget[i].ccy = v; })} />
-                  <Btn size="sm" tone="danger" onClick={() => up((s) => { s.budget.splice(i, 1); })}>×</Btn>
+                  <div className="flex gap-2 mt-2 items-center">
+                    <TextIn type="number" right value={b.amount} onChange={(v) => up((s) => { s.budget[i].amount = v; })} />
+                    <CcySelect value={b.ccy} onChange={(v) => up((s) => { s.budget[i].ccy = v; })} />
+                    <RemoveBtn onClick={() => up((s) => { s.budget.splice(i, 1); })} label={L("Delete")} />
+                  </div>
                 </div>
               ))}
             </div>
@@ -1371,10 +1425,10 @@ function Plan({ st, d, up, lang }) {
           <tbody style={{ fontSize: 13.5 }}>
             {[[L("Money in"), d.income, C.jade], [L("Spending"), -d.plannedExp, C.ink], [L("Set aside"), -d.plannedSave, C.gold]].map(([l, v, c]) => (
               <tr key={l} className="pb-row"><td style={{ padding: "6px 0", color: C.ink2 }}>{l}</td>
-                <td style={{ textAlign: "right" }}><Num value={money(v)} prefix="HK$" color={c} /></td></tr>
+                <td style={{ textAlign: "right" }}><Num value={hk(v)} color={c} /></td></tr>
             ))}
             <tr><td style={{ padding: "8px 0", fontWeight: 800 }}>{L("Left over")}</td>
-              <td style={{ textAlign: "right" }}><Num value={money(d.surplus)} prefix="HK$" size={17} weight={800} color={d.surplus < 0 ? C.red : C.jade} /></td></tr>
+              <td style={{ textAlign: "right" }}><Num value={hk(d.surplus)} size={17} weight={800} color={d.surplus < 0 ? C.red : C.jade} /></td></tr>
           </tbody>
         </table>
         <div style={{ fontSize: 12, color: C.ink2, marginTop: 6 }}>
@@ -1402,7 +1456,7 @@ function BestRates({ br, lang }) {
     return (
       <table style={{ width: "100%", fontSize: 12.5, borderCollapse: "collapse", fontVariantNumeric: "tabular-nums", marginTop: 6 }}>
         <thead>
-          <tr style={{ color: C.ink2, fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".08em" }}>
+          <tr style={{ color: C.ink2, fontSize: 10.5, letterSpacing: ".08em" }}>
             <th style={{ textAlign: "left", paddingBottom: 3 }}>{ccy}</th>
             {terms.map((m) => <th key={m} style={{ textAlign: "right" }}>{m}{tr("個月", "M")}</th>)}
           </tr>
@@ -1572,7 +1626,7 @@ function Fx({ st, d, up, lang }) {
           <div style={{ fontSize: 11, color: C.ink2 }}>{tr(`一年 ${chg(u) >= 0 ? "+" : ""}${chg(u).toFixed(2)}% · ${trend(u)}`, `1y ${chg(u) >= 0 ? "+" : ""}${chg(u).toFixed(2)}% · ${trend(u)}`)}</div>
         </Card>
         {c && (
-          <Card accent={C.red} pad="p-3">
+          <Card pad="p-3">
             <Eyebrow>{tr("1 人民幣", "¥1 RMB")}</Eyebrow>
             <div className="mt-1"><Num value={c.last.toFixed(4)} prefix="HK$" size={18} weight={800} /></div>
             <div style={{ fontSize: 11, color: C.ink2 }}>{tr(`一年 ${chg(c) >= 0 ? "+" : ""}${chg(c).toFixed(2)}% · ${trend(c)}`, `1y ${chg(c) >= 0 ? "+" : ""}${chg(c).toFixed(2)}% · ${trend(c)}`)}</div>
@@ -1582,7 +1636,7 @@ function Fx({ st, d, up, lang }) {
 
       <Card accent={C.blue}>
         <div className="flex justify-between items-center gap-2 flex-wrap">
-          <Eyebrow color={C.blue}>{tr("港元 ↔ 美元", "HKD ↔ USD")}</Eyebrow>
+          <Eyebrow>{tr("港元 ↔ 美元", "HKD ↔ USD")}</Eyebrow>
           <RangeBtns />
         </div>
         {chart("usd", C.blue, true)}
@@ -1595,12 +1649,12 @@ function Fx({ st, d, up, lang }) {
       </Card>
 
       {c && cnyAdvice && (
-        <Card accent={C.red}>
+        <Card>
           <div className="flex justify-between items-center gap-2 flex-wrap">
-            <Eyebrow color={C.red}>{tr("港元 ↔ 人民幣", "HKD ↔ RMB")}</Eyebrow>
+            <Eyebrow>{tr("港元 ↔ 人民幣", "HKD ↔ RMB")}</Eyebrow>
             <RangeBtns />
           </div>
-          {chart("cny", C.red, false)}
+          {chart("cny", C.gold, false)}
           <div style={{ fontSize: 12, color: C.ink2, marginTop: 4 }}>
             {tr(`一年範圍 ${c.min.toFixed(4)}–${c.max.toFixed(4)}；現價高於過去一年 ${c.pct.toFixed(0)}% 的日子。`,
               `1-year range ${c.min.toFixed(4)}–${c.max.toFixed(4)}; today is higher than on ${c.pct.toFixed(0)}% of days in that year.`)}
@@ -1610,8 +1664,8 @@ function Fx({ st, d, up, lang }) {
         </Card>
       )}
 
-      <Card accent={C.gold}>
-        <Eyebrow color={C.gold}>{tr("記錄銀行牌價", "Log a bank rate")}</Eyebrow>
+      <Card>
+        <Eyebrow>{tr("記錄銀行牌價", "Log a bank rate")}</Eyebrow>
         <div style={{ fontSize: 12, color: C.ink2, marginTop: 4, lineHeight: 1.5 }}>
           {tr("恒生的電匯牌價網頁用程式載入，無法自動讀取。換匯時把恒生 App 顯示的買入／賣出價記下，這裡會算出它比市場價差多少，並用來估算之後每日的恒生牌價。",
             "Hang Seng's rate page loads by script and can't be read automatically. When you convert, log the buy/sell the Hang Seng app shows; this works out its markup over the market rate and uses it to estimate Hang Seng's rate each day after.")}
@@ -1642,7 +1696,7 @@ function Fx({ st, d, up, lang }) {
         {quotes.length > 0 && (
           <table className="mt-3" style={{ width: "100%", fontSize: 12, borderCollapse: "collapse", fontVariantNumeric: "tabular-nums" }}>
             <thead>
-              <tr style={{ color: C.ink2, fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".06em" }}>
+              <tr style={{ color: C.ink2, fontSize: 10.5, letterSpacing: ".06em" }}>
                 <th style={{ textAlign: "left" }}>{tr("日期", "Date")}</th><th style={{ textAlign: "left" }}>{tr("銀行", "Bank")}</th>
                 <th style={{ textAlign: "right" }}>{tr("買入／賣出", "Buy / sell")}</th><th style={{ textAlign: "right" }}>{tr("差價", "Markup")}</th><th />
               </tr>
@@ -1718,7 +1772,7 @@ function Invest({ st, d, up, lang }) {
 
   return (
     <div className="space-y-4">
-      <Card accent={pnlTone(v.pnlUSD)}>
+      <Card>
         <div className="flex justify-between items-start gap-3">
           <div style={{ minWidth: 0 }}>
             <Eyebrow>{tr("IBKR 帳戶總值", "IBKR account value")}</Eyebrow>
@@ -1807,7 +1861,7 @@ function Invest({ st, d, up, lang }) {
           </div>
           <table className="mt-3" style={{ width: "100%", fontSize: 12.5, borderCollapse: "collapse", fontVariantNumeric: "tabular-nums" }}>
             <thead>
-              <tr style={{ color: C.ink2, fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".08em" }}>
+              <tr style={{ color: C.ink2, fontSize: 10.5, letterSpacing: ".08em" }}>
                 <th style={{ textAlign: "left", paddingBottom: 4 }}>{tr("基金", "Fund")}</th>
                 <th style={{ textAlign: "right" }}>{tr("金額", "Amount")}</th>
                 <th style={{ textAlign: "right" }}>{tr("股數", "Shares")}</th>
@@ -1836,8 +1890,8 @@ function Invest({ st, d, up, lang }) {
         </Card>
       )}
 
-      <Card accent={C.gold}>
-        <Eyebrow color={C.gold}>{tr("回報走勢", "Return over time")}</Eyebrow>
+      <Card>
+        <Eyebrow>{tr("回報走勢", "Return over time")}</Eyebrow>
         {v.hist.length >= 2 ? (
           <>
             <div style={{ fontSize: 11.5, color: C.ink2, margin: "2px 0 8px" }}>{tr("持倉市值對比投入成本（美元），每日一點。", "Holdings value against what you paid (USD), one point a day.")}</div>
@@ -2060,7 +2114,7 @@ function Subs({ st, d, up, lang }) {
                     <Lbl t={`${tr("費用", "Cost")} ${x.ccy || "HKD"}`}>
                       <div className="flex gap-1">
                         <TextIn type="number" step="0.01" right value={x.amount} onChange={(v) => up((s) => { s.subs[i].amount = v; })} />
-                        <CcySelect w={84} value={x.ccy} onChange={(v) => up((s) => { s.subs[i].ccy = v; })} />
+                        <CcySelect value={x.ccy} onChange={(v) => up((s) => { s.subs[i].ccy = v; })} />
                       </div>
                     </Lbl>
                     <Lbl t={tr("收費週期", "Billed")}>
@@ -2179,7 +2233,7 @@ function Goals({ st, d, up, lang }) {
         );
       })}
       <Btn onClick={() => up((s) => { s.goals.push({ id: uid(), name: "", target: 0, current: 0, deadline: iso(addMonths(todayISO(), 12)), monthly: 0 }); })}>{L("+ Add a goal")}</Btn>
-      <Card accent={C.gold}>
+      <Card>
         <Eyebrow>{L("All goals together")}</Eyebrow>
         <div className="flex items-end justify-between mt-1">
           <Num value={money(d.goalNow)} prefix="HK$" size={20} weight={800} wrap />
