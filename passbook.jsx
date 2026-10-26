@@ -69,6 +69,20 @@ const daysBetween = (a, b) => {
 const fmtDate = (d, lang = "zh") => { const dt = validDate(d); return dt ? dt.toLocaleDateString(lang === "zh" ? "zh-Hant" : "en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—"; };
 const fmtShort = (d, lang = "zh") => { const dt = validDate(d); return dt ? dt.toLocaleDateString(lang === "zh" ? "zh-Hant" : "en-GB", { day: "2-digit", month: "short" }) : "—"; };
 const monthKey = (d) => String(d).slice(0, 7);
+// Planned spends: months from this month up to and including the target month.
+const planMonthsLeft = (date) => {
+  if (!date) return 1;
+  const [ty, tm] = String(date).split("-").map(Number);
+  const now = new Date();
+  return Math.max(1, (ty * 12 + tm) - (now.getFullYear() * 12 + now.getMonth() + 1) + 1);
+};
+const planInfo = (p, rates, txs) => {
+  const target = toHKD(p.amount, p.ccy || "HKD", rates);
+  const spent = txs.filter((t) => t.planId === p.id && t.kind === "expense").reduce((a, t) => a + toHKD(t.amount, t.ccy || "HKD", rates), 0);
+  const remaining = Math.max(0, target - spent);
+  const monthsLeft = planMonthsLeft(p.date);
+  return { target, spent, remaining, monthsLeft, perMonth: remaining / monthsLeft, pct: target ? Math.min(100, (spent / target) * 100) : 0 };
+};
 const monthLabel = (k, lang = "zh") => new Date(k + "-01").toLocaleDateString(lang === "zh" ? "zh-Hant" : "en-GB", { month: "short", year: "numeric" });
 const CCYS = ["HKD", "USD", "CNY"];
 const toHKD = (amt, ccy, rates) => n(amt) * (ccy === "HKD" ? 1 : n(rates?.[ccy]) || 1);
@@ -80,6 +94,8 @@ const D = (bank, ccy, product, principal, rate, termMonths, startedDaysAgo, auto
   start: iso(new Date(Date.now() - startedDaysAgo * DAY)), autoRenew, note, closed: false,
 });
 
+// Blank starting sheet for brand-new accounts (and the Reset button).
+// Personal figures are never shipped with the app: each user enters their own.
 const SEED = {
   v: 5,
   settings: { rates: { USD: 7.8, CNY: 1.09 }, inflation: 2.5, investReturn: 6.5, emergencyMonths: 6 },
@@ -87,49 +103,14 @@ const SEED = {
   cash: { balance: 0, note: "" },
   debts: [],
   subs: [],
-  invest: { targetPct: 70, fundA: "SPYL", fundB: "IBTA", quarterly: 15000, months: [1, 4, 7, 10], janExtra: 0, done: {} },
+  invest: { targetPct: 70, fundA: "SPYL", fundB: "IBTA", quarterly: 0, months: [1, 4, 7, 10], janExtra: 0, done: {} },
   snapshots: [],
-  income: [{ id: uid(), source: "Monthly salary", amount: 18000, ccy: "HKD" }],
-  budget: [
-    { id: uid(), name: "Catering", group: "Living", amount: 3500, ccy: "HKD", note: "≈ HK$116 a day" },
-    { id: uid(), name: "Rent", group: "Living", amount: 4200, ccy: "HKD", note: "Basic rent" },
-    { id: uid(), name: "Subscriptions", group: "Living", amount: 200, ccy: "HKD", note: "iCloud, Apple Music" },
-    { id: uid(), name: "Utilities", group: "Living", amount: 100, ccy: "HKD", note: "Included in rent" },
-    { id: uid(), name: "Girlfriend", group: "People & learning", amount: 1800, ccy: "HKD", note: "Monthly" },
-    { id: uid(), name: "Social dining & transport", group: "People & learning", amount: 1200, ccy: "HKD", note: "" },
-    { id: uid(), name: "Books", group: "People & learning", amount: 300, ccy: "HKD", note: "" },
-    { id: uid(), name: "Courses", group: "People & learning", amount: 400, ccy: "HKD", note: "" },
-    { id: uid(), name: "Shenzhen trips", group: "People & learning", amount: 0, ccy: "HKD", note: "Set a monthly cap in HKD" },
-    { id: uid(), name: "General savings", group: "Savings", amount: 4500, ccy: "HKD", note: "Mox time deposit" },
-    { id: uid(), name: "Travel savings", group: "Savings", amount: 1800, ccy: "HKD", note: "Hang Seng" },
-  ],
-  tx: [
-    { id: uid(), date: "2025-07-01", name: "Living cost", kind: "expense", amount: 4500, ccy: "HKD", note: "" },
-    { id: uid(), date: "2025-07-07", name: "General savings", kind: "saving", amount: 4500, ccy: "HKD", note: "" },
-    { id: uid(), date: "2025-07-07", name: "Travel savings", kind: "saving", amount: 1800, ccy: "HKD", note: "" },
-    { id: uid(), date: "2025-07-07", name: "Master fee", kind: "expense", amount: 1800, ccy: "HKD", note: "" },
-    { id: uid(), date: "2025-07-14", name: "Driving licence", kind: "expense", amount: 510, ccy: "HKD", note: "" },
-    { id: uid(), date: "2025-09-01", name: "Driving lesson", kind: "expense", amount: 550, ccy: "HKD", note: "" },
-  ],
-  deposits: [
-    D("Mox", "HKD", "3-month", 3000, 3.2, 3, 96, false, "Ladder rung 1"),
-    D("Mox", "HKD", "3-month", 3000, 3.1, 3, 70, false, "Ladder rung 2"),
-    D("Mox", "HKD", "3-month", 3000, 3.05, 3, 60, false, "Ladder rung 3"),
-    D("Mox", "HKD", "3-month", 3000, 3.0, 3, 45, false, "Ladder rung 4"),
-    D("Mox", "HKD", "6-month", 3000, 2.95, 6, 150, false, ""),
-    D("Mox", "USD", "3-month", 400, 3.8, 3, 50, false, ""),
-    D("Mox", "USD", "6-month", 400, 3.75, 6, 120, false, ""),
-    D("Mox", "HKD", "1-month", 2000, 2.9, 1, 20, true, ""),
-    D("Mox", "HKD", "6-month", 2000, 3.0, 6, 30, false, ""),
-    D("Mox", "HKD", "12-month", 4000, 3.1, 12, 200, false, ""),
-    D("Hang Seng", "HKD", "6-month", 12000, 2.4, 6, 100, false, "Travel fund"),
-    D("BOCHK", "USD", "3-month", 1000, 3.9, 3, 30, false, "New fund rate"),
-  ],
-  goals: [
-    { id: uid(), name: "Contingency fund", target: 48000, current: 30000, deadline: "2026-12-31", monthly: 4500 },
-    { id: uid(), name: "Parents' phone", target: 8700, current: 0, deadline: "2026-11-10", monthly: 1000 },
-    { id: uid(), name: "Driving licence", target: 10000, current: 0, deadline: "2027-01-01", monthly: 2000 },
-  ],
+  income: [],
+  budget: [],
+  tx: [],
+  deposits: [],
+  plans: [],
+  goals: [],
 };
 
 /* ── storage ─────────────────────────────────────────────────── */
@@ -153,6 +134,7 @@ function migrate(s) {
   if (!s.settings.otRate) s.settings.otRate = 45;
   if (!s.leave) s.leave = { perYear: 12, anchorDate: todayISO(), anchorBalance: 12, days: [] };
   if (!s.events) s.events = [];
+  if (!s.plans) s.plans = [];
   if (!s.health) s.health = { heightCm: 0, goalBmi: 24, start: null, milestone: null, kcal: 0, protein: 0, weeklyMin: 250, plan: { swim: 2, strength: 2, cardio: 1 }, unit: "kg", weights: [], activities: [] };
   s.tx = (s.tx || []).map((t) => ({ ccy: "HKD", ...t }));
   s.income = (s.income || []).map((r) => ({ ccy: "HKD", ...r }));
@@ -297,7 +279,7 @@ function subInfo(x, rates) {
 /* ── investment maths (IBKR snapshot + buy plan) ─────────────── */
 // The snapshot is written once a day by a server-side sync from IBKR;
 // the browser only reads it. `plan` is the user's own buy schedule.
-const INVEST_DEFAULT = { targetPct: 70, fundA: "SPYL", fundB: "IBTA", quarterly: 15000, months: [1, 4, 7, 10], janExtra: 0, done: {} };
+const INVEST_DEFAULT = { targetPct: 70, fundA: "SPYL", fundB: "IBTA", quarterly: 0, months: [1, 4, 7, 10], janExtra: 0, done: {} };
 const BUY_SOON_DAYS = 7;
 const limitPrice = (p) => Math.ceil(n(p) * 1.003 * 100) / 100;
 
@@ -531,10 +513,97 @@ const fxMidOn = (fx, date, ccy) => {
 };
 
 /* ════════════════════════════════════════════════════════════ */
+/* ── QUICK ENTRY: log one spend in a few taps ────────────────── */
+// Everyday categories, one tap each. [Chinese, English]
+const QUICK_PRESETS = [["交通", "Transport"], ["超市", "Groceries"], ["午餐", "Lunch"], ["八達通", "Octopus top-up"]];
+function QuickEntry({ st, up, lang, onClose, onSaved }) {
+  const tr = (zh, en) => (lang === "zh" ? zh : en);
+  const [amount, setAmount] = useState("");
+  const [ccy, setCcy] = useState("HKD");
+  const [cat, setCat] = useState("");
+  const [item, setItem] = useState("");
+  const [date, setDate] = useState(todayISO());
+  const [err, setErr] = useState("");
+  const chip = (sel, tone) => ({
+    border: "none", borderRadius: 999, padding: "8px 13px", fontSize: 14, fontWeight: 700, cursor: "pointer", minHeight: 38,
+    background: sel ? (tone || C.jade) : C.chip, color: sel ? C.onJade : C.ink,
+  });
+  // Hide a preset if a budget line already has its name, so it isn't shown twice.
+  const presets = QUICK_PRESETS.map(([zh, en], i) => ({ key: "x:" + i, zh, en, label: tr(zh, en) }))
+    .filter((p) => !st.budget.some((b) => [p.zh, p.en].includes((b.name || "").trim())));
+  const save = () => {
+    if (!n(amount)) { setErr(tr("請輸入金額", "Enter an amount")); return; }
+    if (!cat) { setErr(tr("揀一個分類", "Pick a category")); return; }
+    let name; let tag = {}; let note = "";
+    if (cat === "sudden") {
+      name = item.trim() || tr("突然購買", "Sudden purchase");
+      tag = { oneOff: true };
+    } else if (cat.startsWith("x:")) {
+      const pr = presets.find((x) => x.key === cat);
+      if (!pr) { setErr(tr("請重新揀分類", "Pick the category again")); return; }
+      name = pr.label; note = item.trim();
+    } else if (cat.startsWith("p:")) {
+      const p = st.plans.find((x) => x.id === cat.slice(2));
+      if (!p) { setErr(tr("找不到這個計劃", "That plan is gone")); return; }
+      name = p.name || tr("計劃", "Plan"); tag = { planId: p.id }; note = item.trim();
+    } else {
+      const b = st.budget.find((x) => x.id === cat.slice(2));
+      if (!b) { setErr(tr("找不到這個分類", "That category is gone")); return; }
+      name = b.name; note = item.trim();
+    }
+    const amt = n(amount);
+    up((s) => { s.tx.push({ id: uid(), date, name, kind: "expense", amount: amt, ccy, note, ...tag }); });
+    onSaved(tr(`已記錄 ${ccySign(ccy)}${money(amt)} · ${name}`, `Logged ${ccySign(ccy)}${money(amt)} · ${name}`));
+    onClose();
+  };
+  return (
+    <>
+      <div className="pb-sheet-bg" onClick={onClose} />
+      <div className="pb-sheet" role="dialog" aria-modal="true" aria-label={tr("記一筆", "Quick entry")} style={{ maxHeight: "86vh", overflowY: "auto" }}>
+        <div style={{ width: 40, height: 5, borderRadius: 3, background: C.rule, margin: "0 auto 12px" }} />
+        <div className="flex justify-between items-center">
+          <Eyebrow>{tr("記一筆", "Quick entry")}</Eyebrow>
+          <button onClick={onClose} className="pb-tab" aria-label={tr("關閉", "Close")} style={{ background: C.chip, border: "none", borderRadius: 999, width: 32, height: 32, fontSize: 16, color: C.ink2, cursor: "pointer" }}>×</button>
+        </div>
+        <div className="flex gap-2 items-center mt-2">
+          <input className="pb-in" type="number" inputMode="decimal" autoFocus placeholder="0" value={amount}
+            onChange={(e) => { setAmount(e.target.value); setErr(""); }}
+            style={{ flex: 1, fontSize: 36, fontWeight: 800, fontFamily: MONO, padding: "8px 12px", textAlign: "right", minWidth: 0 }} />
+          <CcySelect value={ccy} onChange={setCcy} />
+        </div>
+        <div className="mt-3" style={{ fontSize: 12.5, color: C.ink2 }}>{tr("分類", "Category")}</div>
+        <div className="flex flex-wrap gap-2 mt-1">
+          {presets.map((p) => (
+            <button key={p.key} className="pb-tab" onClick={() => { setCat(p.key); setErr(""); }} style={chip(cat === p.key)}>{p.label}</button>
+          ))}
+          <button className="pb-tab" onClick={() => { setCat("sudden"); setErr(""); }} style={chip(cat === "sudden", C.gold)}>{tr("突然購買", "Sudden")}</button>
+          {st.plans.map((p) => (
+            <button key={p.id} className="pb-tab" onClick={() => { setCat("p:" + p.id); setErr(""); }} style={chip(cat === "p:" + p.id, C.jade)}>{tr("計劃 ", "Plan ")}{p.name || tr("未命名", "Untitled")}</button>
+          ))}
+          {st.budget.map((b) => (
+            <button key={b.id} className="pb-tab" onClick={() => { setCat("b:" + b.id); setErr(""); }} style={chip(cat === "b:" + b.id)}>{b.name || tr("未命名", "Untitled")}</button>
+          ))}
+        </div>
+        {st.budget.length === 0 && st.plans.length === 0 && (
+          <div style={{ fontSize: 12, color: C.ink2, marginTop: 6 }}>{tr("還沒有分類。可以先用「突然購買」，或到計劃頁加分類。", "No categories yet. Use Sudden for now, or add categories on the Plan tab.")}</div>
+        )}
+        <input className="pb-in mt-3" style={{ width: "100%" }} placeholder={tr("買咗咩？（例如 Philips 牙刷 ×4）", "What was it? (e.g. Philips toothbrush x4)")} value={item} onChange={(e) => setItem(e.target.value)} />
+        <div className="flex gap-2 mt-2 items-center">
+          <TextIn type="date" value={date} onChange={setDate} />
+          <button className="pb-tab" onClick={() => setDate(todayISO())} style={chip(date === todayISO())}>{tr("今天", "Today")}</button>
+        </div>
+        {err && <div role="alert" style={{ fontSize: 13, color: C.red, marginTop: 8 }}>{err}</div>}
+        <div className="mt-4"><Btn tone="solid" onClick={save}>{tr("記錄", "Save")}</Btn></div>
+      </div>
+    </>
+  );
+}
+
 export default function Passbook({ lang = "zh", onSignOut, onLang }) {
   const [st, setSt] = useState(null);
   const [tab, setTab] = useState("overview");
   const [moreOpen, setMoreOpen] = useState(false);
+  const [quickOpen, setQuickOpen] = useState(false);
   const [, setThemeTick] = useState(0);
   // Follow the phone's light/dark setting live.
   useEffect(() => {
@@ -572,7 +641,8 @@ export default function Passbook({ lang = "zh", onSignOut, onLang }) {
     const rates = st.settings.rates || { USD: 7.8, CNY: 1.09 };
     const pay = payInfo(st, rates, n(st.settings.otPlanHours));
     const income = pay.net;   // take-home after the employee's 5% MPF, incl. the expected OT hours
-    const plannedExp = st.budget.filter((b) => b.group !== "Savings").reduce((a, b) => a + toHKD(b.amount, b.ccy || "HKD", rates), 0);
+    const suddenMonthly = n(st.settings.suddenMonthly);
+    const plannedExp = st.budget.filter((b) => b.group !== "Savings").reduce((a, b) => a + toHKD(b.amount, b.ccy || "HKD", rates), 0) + suddenMonthly;
     const plannedSave = st.budget.filter((b) => b.group === "Savings").reduce((a, b) => a + toHKD(b.amount, b.ccy || "HKD", rates), 0);
     const essentials = st.budget.filter((b) => b.group === "Living").reduce((a, b) => a + toHKD(b.amount, b.ccy || "HKD", rates), 0);
     const months = [...new Set(st.tx.map((t) => monthKey(t.date)))].sort().reverse();
@@ -609,6 +679,8 @@ export default function Passbook({ lang = "zh", onSignOut, onLang }) {
     const emergencyHKD = eGoal ? n(eGoal.current) : depHKD;
     const cover = plannedExp ? emergencyHKD / plannedExp : 0;
 
+    const plansInfo = (st.plans || []).map((p) => ({ ...p, i: planInfo(p, rates, st.tx) }));
+    const plansMonthly = plansInfo.reduce((a, p) => a + p.i.perMonth, 0);
     const subs = (st.subs || []).filter((x) => !x.closed).map((x) => ({ ...x, i: subInfo(x, rates) }))
       .sort((a, b) => (Number.isNaN(a.i.left) ? 1e9 : a.i.left) - (Number.isNaN(b.i.left) ? 1e9 : b.i.left));
     const subsMonthly = subs.filter((x) => x.i.status !== "ended").reduce((a, x) => a + x.i.monthlyHKD, 0);
@@ -616,7 +688,7 @@ export default function Passbook({ lang = "zh", onSignOut, onLang }) {
     const dueSubs = subs.filter((x) => x.i.status === "due" || x.i.status === "late");
 
     return {
-      income, plannedExp, plannedSave, essentials, surplus: income - plannedExp - plannedSave,
+      income, plannedExp, plannedSave, essentials, suddenMonthly, plansInfo, plansMonthly, surplus: income - plannedExp - plannedSave - plansMonthly,
       months, goalTarget, goalNow, live, depHKD, usdHKD, cnyHKD, blended, idle, nextManual, due30,
       perBank, banks, avgSave, netWorth, emergencyTarget, cover, rates, cashHKD, debtHKD,
       subs, subsMonthly, dueDeps, dueSubs, inv, investedHKD,
@@ -670,6 +742,8 @@ export default function Passbook({ lang = "zh", onSignOut, onLang }) {
         .pb-navbtn{flex:1;display:flex;flex-direction:column;align-items:center;gap:1px;background:none;border:none;padding:6px 0 5px;font-size:11px;font-weight:700;cursor:pointer;min-height:50px;border-radius:24px}
         .pb-sheet-bg{position:fixed;inset:0;z-index:30;background:${C.scrim};animation:pbFade .2s ease}
         .pb-sheet{position:fixed;left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom));z-index:31;background:${C.paper};border-radius:30px;padding:10px 12px 14px;max-width:560px;margin:0 auto;box-shadow:${C.shadow};animation:pbUp .28s cubic-bezier(.2,.9,.3,1.15)}
+        .pb-fab{position:fixed;right:18px;bottom:calc(92px + env(safe-area-inset-bottom));z-index:22;width:58px;height:58px;border-radius:50%;border:none;background:${C.jade};color:${C.onJade};font-size:32px;font-weight:600;line-height:1;cursor:pointer;box-shadow:${C.shadow};display:grid;place-items:center;transition:transform .12s ease}
+        .pb-fab:active{transform:scale(.92)}
         .pb-toast{position:fixed;top:calc(10px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:40;background:${C.ink};color:${C.paper};font-size:13px;font-weight:700;padding:7px 14px;border-radius:999px;box-shadow:${C.shadow};animation:pbDrop .25s ease}
         .pb-pop{animation:pbPop .35s cubic-bezier(.2,.9,.3,1.2)}
         @keyframes pbUp{from{transform:translateY(40px);opacity:0}to{transform:none;opacity:1}}
@@ -721,6 +795,14 @@ export default function Passbook({ lang = "zh", onSignOut, onLang }) {
           </button>
         </div>
       </nav>
+
+      {!quickOpen && !moreOpen && (
+        <button className="pb-fab" onClick={() => setQuickOpen(true)} aria-label={tr("記一筆", "Quick entry")}>+</button>
+      )}
+      {quickOpen && (
+        <QuickEntry st={st} up={up} lang={lang} onClose={() => setQuickOpen(false)}
+          onSaved={(msg) => { setFlash(msg); setTimeout(() => setFlash(""), 1600); }} />
+      )}
 
       {moreOpen && (
         <>
@@ -1419,7 +1501,8 @@ function Month({ st, d, up, lang }) {
   const rates = st.settings.rates;
   const cur = monthKey(todayISO());
   const [m, setM] = useState(d.months.includes(cur) ? cur : d.months[0] || cur);
-  const [f, setF] = useState({ date: todayISO(), name: "", kind: "expense", amount: 0, ccy: "HKD", note: "" });
+  const [trend, setTrend] = useState("month");
+  const [f, setF] = useState({ date: todayISO(), name: "", kind: "expense", amount: 0, ccy: "HKD", note: "", link: "" });
 
   const rows = st.tx.map((t, i) => ({ t, i })).filter((x) => monthKey(x.t.date) === m).sort((a, b) => a.t.date.localeCompare(b.t.date));
   const extraIn = rows.filter((x) => x.t.kind === "income").reduce((a, x) => a + toHKD(x.t.amount, x.t.ccy || "HKD", rates), 0);
@@ -1436,23 +1519,88 @@ function Month({ st, d, up, lang }) {
   const net = inflow - actExp - actSav;
 
   const byName = {};
-  rows.forEach((x) => { if (x.t.kind !== "income") { const k = x.t.name.trim().toLowerCase(); byName[k] = (byName[k] || 0) + toHKD(x.t.amount, x.t.ccy || "HKD", rates); } });
+  const shownName = {};
+  rows.forEach((x) => { if (x.t.kind !== "income" && !x.t.oneOff && !x.t.planId) { const k = x.t.name.trim().toLowerCase(); shownName[k] = x.t.name.trim(); byName[k] = (byName[k] || 0) + toHKD(x.t.amount, x.t.ccy || "HKD", rates); } });
   const pnl = st.budget.map((b) => {
     const k = b.name.trim().toLowerCase(); const a = byName[k] || 0; delete byName[k];
     return { name: b.name, group: b.group, budget: toHKD(b.amount, b.ccy || "HKD", rates), actual: a, diff: toHKD(b.amount, b.ccy || "HKD", rates) - a };
   });
-  Object.entries(byName).forEach(([k, v]) => pnl.push({ name: k, group: "Unplanned", budget: 0, actual: v, diff: -v }));
+  const suddenAct = rows.filter((x) => x.t.oneOff).reduce((a, x) => a + toHKD(x.t.amount, x.t.ccy || "HKD", rates), 0);
+  pnl.push({ name: tr("突然購買", "Sudden purchases"), group: "Sudden", budget: d.suddenMonthly, actual: suddenAct, diff: d.suddenMonthly - suddenAct, key: "sudden" });
+  d.plansInfo.forEach((p) => {
+    const act = rows.filter((x) => x.t.planId === p.id).reduce((a, x) => a + toHKD(x.t.amount, x.t.ccy || "HKD", rates), 0);
+    if (act || p.i.perMonth) pnl.push({ name: p.name || tr("未命名計劃", "Untitled plan"), group: "Planned", budget: act + p.i.perMonth, actual: act, diff: p.i.perMonth, key: p.id });
+  });
+  Object.entries(byName).forEach(([k, v]) => pnl.push({ name: shownName[k] || k, group: "Unplanned", budget: 0, actual: v, diff: -v }));
 
   const gapToEmergency = Math.max(0, d.emergencyTarget - d.emergencyHKD);
   const keep = Math.max(0, net);
   const toCushion = Math.min(keep, gapToEmergency);
   const toInvest = keep - toCushion;
 
+  // Spending by category across all months (expenses only, in HKD).
+  const catStats = (() => {
+    const groups = {};
+    let total = 0;
+    st.tx.forEach((x) => {
+      if (x.kind !== "expense") return;
+      const hkd = toHKD(x.amount, x.ccy || "HKD", rates);
+      const plan = x.planId ? st.plans.find((p) => p.id === x.planId) : null;
+      const key = x.oneOff ? "sudden" : plan ? "plan:" + plan.id : (x.name || "").trim().toLowerCase();
+      const label = x.oneOff ? tr("突然購買", "Sudden purchases") : plan ? (plan.name || tr("計劃", "Plan")) : (x.name || "").trim();
+      if (!groups[key]) groups[key] = { key, label, total: 0, count: 0, month: 0, group: x.oneOff ? "Sudden" : plan ? "Planned" : "" };
+      groups[key].total += hkd;
+      groups[key].count += 1;
+      if (monthKey(x.date) === m) groups[key].month += hkd;
+      total += hkd;
+    });
+    return { rows: Object.values(groups).sort((a, b) => b.total - a.total), total };
+  })();
+
+  // Daily spending trend (expenses only, HKD).
+  const spendByDay = {};
+  st.tx.forEach((x) => { if (x.kind === "expense") spendByDay[x.date] = (spendByDay[x.date] || 0) + toHKD(x.amount, x.ccy || "HKD", rates); });
+  const dim = (k) => new Date(Number(k.slice(0, 4)), Number(k.slice(5, 7)), 0).getDate();
+  const dkey = (k, day) => `${k}-${String(day).padStart(2, "0")}`;
+  const todayK = todayISO();
+  const dailyRows = (() => {
+    let cum = 0;
+    return Array.from({ length: dim(m) }, (_, i) => { const v = spendByDay[dkey(m, i + 1)] || 0; cum += v; return { d: i + 1, spend: Math.round(v), cum: Math.round(cum) }; });
+  })();
+  const dayTotal = dailyRows.reduce((a, r) => a + r.spend, 0);
+  const elapsedDays = m === monthKey(todayK) ? Number(todayK.slice(8, 10)) : dim(m);
+  const avgDay = elapsedDays ? dayTotal / elapsedDays : 0;
+  const topDay = dailyRows.reduce((best, r) => (r.spend > (best ? best.spend : 0) ? r : best), null);
+  const cmpMonths = [...new Set([cur, ...Object.keys(spendByDay).map((k) => k.slice(0, 7))])].sort().slice(-6);
+  const cmpRows = (() => {
+    const cums = Object.fromEntries(cmpMonths.map((k) => [k, 0]));
+    return Array.from({ length: 31 }, (_, i) => {
+      const row = { d: i + 1 };
+      cmpMonths.forEach((k) => {
+        if (i + 1 > dim(k) || dkey(k, i + 1) > todayK) { row[k] = null; return; }
+        cums[k] += spendByDay[dkey(k, i + 1)] || 0;
+        row[k] = Math.round(cums[k]);
+      });
+      return row;
+    });
+  })();
+  const cmpPal = [C.ink2, C.violet, C.pink, C.gold, C.blue];
+  const cmpPrev = cmpMonths.length > 1 ? cmpMonths[cmpMonths.length - 2] : null;
+  const cmpDay = Math.min(Number(todayK.slice(8, 10)), 31);
+  const cmpNow = cmpRows[cmpDay - 1]?.[cur];
+  const cmpThen = cmpPrev ? cmpRows[cmpDay - 1]?.[cmpPrev] : null;
+  const axisK = (v) => (v >= 1000 ? (v / 1000).toFixed(v % 1000 ? 1 : 0) + "k" : String(v));
+  const tipStyle = { background: C.card, border: `1px solid ${C.rule}`, borderRadius: 8, fontSize: 12, fontFamily: MONO };
+
   const add = () => {
-    if (!f.name.trim() || !n(f.amount)) return;
-    up((s) => { s.tx.push({ ...f, id: uid(), amount: n(f.amount) }); });
+    const plan = st.plans.find((p) => p.id === f.link);
+    const name = f.name.trim() || (plan ? plan.name : "");
+    if (!name || !n(f.amount)) return;
+    const { link, ...rest } = f;
+    const tag = f.kind === "expense" && link === "sudden" ? { oneOff: true } : f.kind === "expense" && plan ? { planId: plan.id } : {};
+    up((s) => { s.tx.push({ ...rest, name, id: uid(), amount: n(f.amount), ...tag }); });
     setM(monthKey(f.date));
-    setF({ date: f.date, name: "", kind: "expense", amount: 0, ccy: f.ccy, note: "" });
+    setF({ date: f.date, name: "", kind: "expense", amount: 0, ccy: f.ccy, note: "", link: "" });
   };
   const monthList = [...new Set([cur, ...d.months])].sort().reverse();
 
@@ -1516,7 +1664,14 @@ function Month({ st, d, up, lang }) {
           </select>
         </div>
         <input className="pb-in mt-2" style={{ width: "100%" }} list="cats" placeholder={L("Category")} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
-        <datalist id="cats">{st.budget.map((b) => <option key={b.id} value={b.name} />)}</datalist>
+        <datalist id="cats">{[...QUICK_PRESETS.map(([zh, en]) => tr(zh, en)), ...st.budget.map((b) => b.name)].map((v) => <option key={v} value={v} />)}</datalist>
+        {f.kind === "expense" && (
+          <select className="pb-in mt-2" style={{ width: "100%" }} value={f.link} onChange={(e) => setF({ ...f, link: e.target.value })}>
+            <option value="">{tr("計入預算分類", "Counts against a budget line")}</option>
+            <option value="sudden">{tr("突然購買（不在預算內）", "Sudden purchase (not budgeted)")}</option>
+            {st.plans.map((p) => <option key={p.id} value={p.id}>{tr("計劃：", "Plan: ")}{p.name || tr("未命名", "Untitled")}</option>)}
+          </select>
+        )}
         <div className="flex gap-2 mt-2">
           <TextIn type="number" right placeholder="0" value={f.amount} onChange={(v) => setF({ ...f, amount: v })} />
           <CcySelect value={f.ccy} onChange={(v) => setF({ ...f, ccy: v })} />
@@ -1552,6 +1707,8 @@ function Month({ st, d, up, lang }) {
                       {tx.name}
                       {tx.kind === "saving" && <span className="ml-2"><Chip tone="gold">{L("set aside")}</Chip></span>}
                       {tx.kind === "income" && <span className="ml-2"><Chip tone="jade">{L("in")}</Chip></span>}
+                      {tx.oneOff && <span className="ml-2"><Chip tone="gold">{tr("突然", "sudden")}</Chip></span>}
+                      {tx.planId && <span className="ml-2"><Chip tone="jade">{tr("計劃", "plan")}</Chip></span>}
                       {tx.note && <div style={{ fontSize: 11, color: C.ink2 }}>{tx.note}</div>}
                     </td>
                     <td style={{ padding: "8px 10px", textAlign: "right" }}><Num value={`${ccySign(tx.ccy || "HKD")}${money(tx.amount)}`} color={tx.kind === "income" ? C.jade : tx.kind === "saving" ? C.gold : C.ink} /></td>
@@ -1568,6 +1725,102 @@ function Month({ st, d, up, lang }) {
       </Card>
 
       <Card pad="p-0">
+        <div className="p-3" style={{ borderBottom: `1px solid ${C.rule}` }}>
+          <div className="flex justify-between items-baseline">
+            <Eyebrow>{tr("分類統計（全部月份）", "Spending by category (all months)")}</Eyebrow>
+            <Num value={hk(catStats.total, 0)} size={15} weight={800} />
+          </div>
+        </div>
+        {catStats.rows.length === 0 ? (
+          <div className="p-5 text-center" style={{ fontSize: 13, color: C.ink2 }}>{tr("還沒有支出記錄。", "No spending logged yet.")}</div>
+        ) : (
+          <div className="p-3 space-y-3">
+            {catStats.rows.map((r) => {
+              const share = catStats.total ? (r.total / catStats.total) * 100 : 0;
+              return (
+                <div key={r.key}>
+                  <div className="flex justify-between items-baseline gap-2">
+                    <span className="pb-ellipsis" style={{ fontSize: 13.5, fontWeight: 700, minWidth: 0 }}>
+                      {r.label}
+                      <span style={{ color: C.ink2, fontWeight: 500 }}> · {tr(`${r.count} 筆`, `${r.count} entries`)}</span>
+                      {r.group === "Sudden" && <span className="ml-2"><Chip tone="gold">{tr("突然", "sudden")}</Chip></span>}
+                      {r.group === "Planned" && <span className="ml-2"><Chip tone="jade">{tr("計劃", "plan")}</Chip></span>}
+                    </span>
+                    <span className="pb-shrink0" style={{ fontSize: 13.5 }}>
+                      <Num value={hk(r.total, 0)} size={13.5} weight={800} />
+                      <span style={{ color: C.ink2, fontSize: 12 }}> · {share.toFixed(0)}%</span>
+                    </span>
+                  </div>
+                  <div className="mt-1"><Bar2 pct={share} color={r.group === "Sudden" ? C.gold : r.group === "Planned" ? C.jade : C.blue} h={5} /></div>
+                  <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 2 }}>{tr(`本月 ${hk(r.month, 0)}`, `This month ${hk(r.month, 0)}`)}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
+      <Card>
+        <div className="flex justify-between items-center gap-2 flex-wrap">
+          <Eyebrow>{tr("每日支出趨勢", "Daily spending trend")}</Eyebrow>
+          <div className="flex gap-1">
+            {[["month", tr("本月每日", "This month")], ["compare", tr("各月對比", "Compare months")]].map(([k, label]) => (
+              <button key={k} className="pb-tab" onClick={() => setTrend(k)}
+                style={{ border: "none", borderRadius: 999, padding: "6px 12px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", background: trend === k ? C.jade : C.chip, color: trend === k ? C.onJade : C.ink }}>{label}</button>
+            ))}
+          </div>
+        </div>
+        {trend === "month" ? (
+          <>
+            <div className="grid mt-3" style={{ gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+              {[[tr("總支出", "Total"), hk(dayTotal, 0)], [tr("每日平均", "Per day"), hk(avgDay, 0)], [tr("最高一日", "Peak day"), topDay && topDay.spend ? `${hk(topDay.spend, 0)} · ${topDay.d}${tr("日", "")}` : "—"]].map(([l, v]) => (
+                <div key={l}>
+                  <div style={{ fontSize: 11.5, color: C.ink2 }}>{l}</div>
+                  <Num value={v} size={14} weight={800} wrap />
+                </div>
+              ))}
+            </div>
+            <div className="mt-3" style={{ height: 180 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={dailyRows} margin={{ top: 4, right: 4, left: -14, bottom: 0 }}>
+                  <CartesianGrid stroke={C.rule} vertical={false} />
+                  <XAxis dataKey="d" ticks={[1, 5, 10, 15, 20, 25, 30]} tick={{ fontSize: 10, fill: C.ink2, fontFamily: MONO }} tickLine={false} axisLine={{ stroke: C.rule }} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 10, fill: C.ink2, fontFamily: MONO }} tickFormatter={axisK} tickLine={false} axisLine={false} />
+                  <Tooltip contentStyle={tipStyle} labelFormatter={(l) => tr(`${monthLabel(m, lang)} ${l} 日`, `${monthLabel(m, lang)} ${l}`)} formatter={(v) => ["HK$" + money(v), tr("支出", "Spent")]} />
+                  <Bar dataKey="spend" fill={C.blue} radius={[3, 3, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 6 }}>{tr(`${monthLabel(m, lang)}每日支出（港元）。換月份請用上面的月份選單。`, `Spending per day in ${monthLabel(m, lang)}, in HKD. Change month with the selector at the top.`)}</div>
+          </>
+        ) : (
+          <>
+            <div className="mt-3" style={{ height: 200 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={cmpRows} margin={{ top: 4, right: 8, left: -14, bottom: 0 }}>
+                  <CartesianGrid stroke={C.rule} vertical={false} />
+                  <XAxis dataKey="d" ticks={[1, 5, 10, 15, 20, 25, 30]} tick={{ fontSize: 10, fill: C.ink2, fontFamily: MONO }} tickLine={false} axisLine={{ stroke: C.rule }} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 10, fill: C.ink2, fontFamily: MONO }} tickFormatter={axisK} tickLine={false} axisLine={false} />
+                  <Tooltip contentStyle={tipStyle} labelFormatter={(l) => tr(`每月 ${l} 日`, `Day ${l}`)} formatter={(v, name) => ["HK$" + money(v), name]} />
+                  {cmpMonths.map((k, i) => {
+                    const last = i === cmpMonths.length - 1;
+                    return <Line key={k} type="monotone" dataKey={k} name={monthLabel(k, lang)} stroke={last ? C.jade : cmpPal[i % cmpPal.length]} strokeWidth={last ? 3 : 1.6} dot={false} connectNulls={false} />;
+                  })}
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            <div style={{ fontSize: 12.5, marginTop: 6 }}>
+              {cmpPrev && cmpNow != null && cmpThen != null
+                ? tr(`到 ${cmpDay} 日為止，本月累計 HK$${money(cmpNow)}，上個月同日 HK$${money(cmpThen)}（${cmpNow - cmpThen >= 0 ? "多" : "少"} HK$${money(Math.abs(cmpNow - cmpThen))}）。`, `By day ${cmpDay} this month is at HK$${money(cmpNow)}, against HK$${money(cmpThen)} last month (${cmpNow - cmpThen >= 0 ? "HK$" + money(cmpNow - cmpThen) + " more" : "HK$" + money(cmpThen - cmpNow) + " less"}).`)
+                : tr("記滿兩個月之後，這裡會比較本月和上月的同日累計。", "Once you have two months logged, this compares this month with last month at the same day.")}
+            </div>
+            <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 4 }}>{tr("每條線是該月到每一日為止的累計支出，線越平越省。", "Each line is that month's running total by day. A flatter line means a slower month.")}</div>
+          </>
+        )}
+      </Card>
+
+      <Card pad="p-0">
         <div className="p-3"><Eyebrow>{L("Plan against actual")}</Eyebrow></div>
         <div className="pb-scroll" style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", minWidth: 420, fontSize: 13 }}>
@@ -1578,11 +1831,13 @@ function Month({ st, d, up, lang }) {
             </tr></thead>
             <tbody>
               {pnl.map((r) => (
-                <tr key={r.name} className="pb-row">
+                <tr key={r.key || r.name} className="pb-row">
                   <td style={{ padding: "7px 10px" }}>
                     {r.name}
                     {r.group === "Savings" && <span className="ml-2"><Chip tone="gold">{L("save")}</Chip></span>}
                     {r.group === "Unplanned" && <span className="ml-2"><Chip tone="red">{L("unplanned")}</Chip></span>}
+                    {r.group === "Sudden" && <span className="ml-2"><Chip tone="gold">{tr("突然", "sudden")}</Chip></span>}
+                    {r.group === "Planned" && <span className="ml-2"><Chip tone="jade">{tr("計劃", "plan")}</Chip></span>}
                   </td>
                   <td style={{ padding: "7px 10px", textAlign: "right" }}><Num value={money(r.budget)} weight={500} color={C.ink2} /></td>
                   <td style={{ padding: "7px 10px", textAlign: "right" }}><Num value={money(r.actual)} /></td>
@@ -1605,6 +1860,7 @@ function Month({ st, d, up, lang }) {
 /* ── PLAN ────────────────────────────────────────────────────── */
 function Plan({ st, d, up, lang }) {
   const L = (key) => t(lang, key);
+  const tr = (zh, en) => (lang === "zh" ? zh : en);
   const rates = st.settings.rates;
   const groups = [
     ["Living", L("Living")],
@@ -1645,6 +1901,43 @@ function Plan({ st, d, up, lang }) {
         <div style={{ fontSize: 12, color: C.ink2, marginTop: 6 }}>{lang === "zh" ? "每月實際時數在「月度」輸入；未輸入時用預計數字。" : "Log actual hours on Month; until you do, the expected figure is used."}</div>
       </Card>
 
+      <Card accent={C.gold}>
+        <Eyebrow color={C.gold}>{tr("突然購買與計劃支出", "Sudden & planned spending")}</Eyebrow>
+        <div className="mt-2" style={{ fontSize: 12.5, color: C.ink2 }}>
+          {tr("突然買的嘢（牙刷、臨時車票）每月預留一個數目。大項目（旅行、約會、蜜月）設定日期，之後每月自動預留。", "Unplanned buys (a toothbrush, a last-minute ticket) get a monthly allowance. Big items (a trip, a date, a honeymoon) get a date, and Passbook works out what to set aside each month.")}
+        </div>
+        <div className="mt-3"><Lbl t={tr("突然購買每月預留 HK$", "Sudden purchases a month, HK$")}><TextIn type="number" right value={st.settings.suddenMonthly ?? 0} onChange={(v) => up((s) => { s.settings.suddenMonthly = v; })} /></Lbl></div>
+        <div className="mt-3 space-y-2">
+          {d.plansInfo.map((p) => {
+            const i = p.i; const idx = st.plans.findIndex((x) => x.id === p.id);
+            return (
+              <div key={p.id} className="pb-row" style={{ paddingBottom: 10 }}>
+                <div className="grid gap-2" style={{ gridTemplateColumns: "1fr 1fr" }}>
+                  <TextIn value={p.name} onChange={(v) => up((s) => { s.plans[idx].name = v; })} placeholder={tr("例如：馬爾代夫蜜月", "e.g. Maldives honeymoon")} />
+                  <TextIn type="date" value={p.date || ""} onChange={(v) => up((s) => { s.plans[idx].date = v; })} />
+                </div>
+                <div className="flex gap-2 mt-2 items-center">
+                  <TextIn type="number" right value={p.amount} onChange={(v) => up((s) => { s.plans[idx].amount = v; })} />
+                  <CcySelect value={p.ccy || "HKD"} onChange={(v) => up((s) => { s.plans[idx].ccy = v; })} />
+                  <RemoveBtn onClick={() => up((s) => { s.plans.splice(idx, 1); })} label={L("Delete")} />
+                </div>
+                {i.target > 0 && (
+                  <>
+                    <div style={{ fontSize: 12, color: C.ink2, marginTop: 6 }}>
+                      {tr(`已花 HK$${money(i.spent)}，目標 HK$${money(i.target)}`, `Spent HK$${money(i.spent)} of HK$${money(i.target)}`)}
+                      {i.remaining > 0 ? tr(`，每月預留 HK$${money(i.perMonth)}（${i.monthsLeft} 個月）`, `, set aside HK$${money(i.perMonth)} a month for ${i.monthsLeft} month${i.monthsLeft === 1 ? "" : "s"}`) : tr("，已齊備", ", fully covered")}
+                    </div>
+                    <div className="mt-1"><Bar2 pct={i.pct} color={i.remaining > 0 ? C.gold : C.jade} h={5} /></div>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div className="mt-2"><Btn size="sm" onClick={() => up((s) => { s.plans.push({ id: uid(), name: "", amount: 0, ccy: "HKD", date: "", note: "" }); })}>{tr("+ 新增計劃支出", "+ Add a planned spend")}</Btn></div>
+        <div style={{ fontSize: 13, marginTop: 10 }}>{tr("計劃每月需預留 ", "Plans need ")}<Num value={hk(d.plansMonthly)} weight={800} />{tr(" / 月", " a month")}</div>
+      </Card>
+
       {groups.map(([g, label]) => {
         const rows = st.budget.map((b, i) => ({ b, i })).filter((x) => x.b.group === g);
         const sum = rows.reduce((a, x) => a + toHKD(x.b.amount, x.b.ccy || "HKD", rates), 0);
@@ -1678,7 +1971,7 @@ function Plan({ st, d, up, lang }) {
         <Eyebrow>{L("Does the plan balance?")}</Eyebrow>
         <table style={{ width: "100%", marginTop: 6 }}>
           <tbody style={{ fontSize: 13.5 }}>
-            {[[lang === "zh" ? "實收（含預計加班，已扣強積金）" : "Take-home (incl. expected OT, after MPF)", d.income, C.jade], [L("Spending"), -d.plannedExp, C.ink], [L("Set aside"), -d.plannedSave, C.gold]].map(([l, v, c]) => (
+            {[[lang === "zh" ? "實收（含預計加班，已扣強積金）" : "Take-home (incl. expected OT, after MPF)", d.income, C.jade], [L("Spending"), -d.plannedExp, C.ink], [L("Set aside"), -d.plannedSave, C.gold], [tr("計劃支出預留", "Planned spends"), -d.plansMonthly, C.gold]].map(([l, v, c]) => (
               <tr key={l} className="pb-row"><td style={{ padding: "6px 0", color: C.ink2 }}>{l}</td>
                 <td style={{ textAlign: "right" }}><Num value={hk(v)} color={c} /></td></tr>
             ))}
