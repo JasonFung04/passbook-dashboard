@@ -31,6 +31,7 @@ const zh = {
   "Invest": "投資",
   "FX": "匯率",
   "Leave": "假期與行程",
+  "Health": "健康",
 
   // overview
   "Next manual re-deposit": "下一筆手動續存",
