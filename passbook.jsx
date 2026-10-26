@@ -1537,6 +1537,25 @@ function Month({ st, d, up, lang }) {
   const toCushion = Math.min(keep, gapToEmergency);
   const toInvest = keep - toCushion;
 
+  // Spending by category across all months (expenses only, in HKD).
+  const catStats = (() => {
+    const groups = {};
+    let total = 0;
+    st.tx.forEach((x) => {
+      if (x.kind !== "expense") return;
+      const hkd = toHKD(x.amount, x.ccy || "HKD", rates);
+      const plan = x.planId ? st.plans.find((p) => p.id === x.planId) : null;
+      const key = x.oneOff ? "sudden" : plan ? "plan:" + plan.id : (x.name || "").trim().toLowerCase();
+      const label = x.oneOff ? tr("突然購買", "Sudden purchases") : plan ? (plan.name || tr("計劃", "Plan")) : (x.name || "").trim();
+      if (!groups[key]) groups[key] = { key, label, total: 0, count: 0, month: 0, group: x.oneOff ? "Sudden" : plan ? "Planned" : "" };
+      groups[key].total += hkd;
+      groups[key].count += 1;
+      if (monthKey(x.date) === m) groups[key].month += hkd;
+      total += hkd;
+    });
+    return { rows: Object.values(groups).sort((a, b) => b.total - a.total), total };
+  })();
+
   const add = () => {
     const plan = st.plans.find((p) => p.id === f.link);
     const name = f.name.trim() || (plan ? plan.name : "");
@@ -1665,6 +1684,42 @@ function Month({ st, d, up, lang }) {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+      </Card>
+
+      <Card pad="p-0">
+        <div className="p-3" style={{ borderBottom: `1px solid ${C.rule}` }}>
+          <div className="flex justify-between items-baseline">
+            <Eyebrow>{tr("分類統計（全部月份）", "Spending by category (all months)")}</Eyebrow>
+            <Num value={hk(catStats.total, 0)} size={15} weight={800} />
+          </div>
+        </div>
+        {catStats.rows.length === 0 ? (
+          <div className="p-5 text-center" style={{ fontSize: 13, color: C.ink2 }}>{tr("還沒有支出記錄。", "No spending logged yet.")}</div>
+        ) : (
+          <div className="p-3 space-y-3">
+            {catStats.rows.map((r) => {
+              const share = catStats.total ? (r.total / catStats.total) * 100 : 0;
+              return (
+                <div key={r.key}>
+                  <div className="flex justify-between items-baseline gap-2">
+                    <span className="pb-ellipsis" style={{ fontSize: 13.5, fontWeight: 700, minWidth: 0 }}>
+                      {r.label}
+                      <span style={{ color: C.ink2, fontWeight: 500 }}> · {tr(`${r.count} 筆`, `${r.count} entries`)}</span>
+                      {r.group === "Sudden" && <span className="ml-2"><Chip tone="gold">{tr("突然", "sudden")}</Chip></span>}
+                      {r.group === "Planned" && <span className="ml-2"><Chip tone="jade">{tr("計劃", "plan")}</Chip></span>}
+                    </span>
+                    <span className="pb-shrink0" style={{ fontSize: 13.5 }}>
+                      <Num value={hk(r.total, 0)} size={13.5} weight={800} />
+                      <span style={{ color: C.ink2, fontSize: 12 }}> · {share.toFixed(0)}%</span>
+                    </span>
+                  </div>
+                  <div className="mt-1"><Bar2 pct={share} color={r.group === "Sudden" ? C.gold : r.group === "Planned" ? C.jade : C.blue} h={5} /></div>
+                  <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 2 }}>{tr(`本月 ${hk(r.month, 0)}`, `This month ${hk(r.month, 0)}`)}</div>
+                </div>
+              );
+            })}
           </div>
         )}
       </Card>
