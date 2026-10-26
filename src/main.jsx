@@ -48,6 +48,18 @@ window.storage = {
   },
 };
 
+// Read-only IBKR data, written daily by a server-side sync (RLS: owner can read only).
+window.ibkrData = async () => {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return null;
+  const [snap, hist] = await Promise.all([
+    supabase.from("ibkr_snapshot").select("as_of, data").eq("user_id", session.user.id).maybeSingle(),
+    supabase.from("ibkr_history").select("day, value_usd, cost_usd, cash_usd, nav_hkd").eq("user_id", session.user.id).order("day"),
+  ]);
+  if (snap.error) throw snap.error;
+  return { snapshot: snap.data || null, history: hist.data || [] };
+};
+
 class ErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { error: null }; }
   static getDerivedStateFromError(error) { return { error }; }

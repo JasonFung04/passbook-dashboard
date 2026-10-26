@@ -63,6 +63,7 @@ const SEED = {
   cash: { balance: 0, note: "" },
   debts: [],
   subs: [],
+  invest: { targetPct: 70, fundA: "SPYL", fundB: "IBTA", quarterly: 15000, months: [1, 4, 7, 10], janExtra: 0, done: {} },
   snapshots: [],
   income: [{ id: uid(), source: "Monthly salary", amount: 18000, ccy: "HKD" }],
   budget: [
@@ -121,6 +122,8 @@ function migrate(s) {
   if (!s.cash) s.cash = { balance: 0, note: "" };
   if (!s.debts) s.debts = [];
   if (!s.subs) s.subs = [];
+  if (!s.invest) s.invest = structuredClone(INVEST_DEFAULT);
+  if (!s.invest.done) s.invest.done = {};
   s.tx = (s.tx || []).map((t) => ({ ccy: "HKD", ...t }));
   s.income = (s.income || []).map((r) => ({ ccy: "HKD", ...r }));
   s.budget = (s.budget || []).map((r) => ({ ccy: "HKD", ...r }));
@@ -242,6 +245,79 @@ function subInfo(x, rates) {
   return { monthlyHKD, end, endISO: iso(end), notice, actBy, actByISO: iso(actBy), remindFrom, left, endLeft, remind, status };
 }
 
+/* ── investment maths (IBKR snapshot + buy plan) ─────────────── */
+// The snapshot is written once a day by a server-side sync from IBKR;
+// the browser only reads it. `plan` is the user's own buy schedule.
+const INVEST_DEFAULT = { targetPct: 70, fundA: "SPYL", fundB: "IBTA", quarterly: 15000, months: [1, 4, 7, 10], janExtra: 0, done: {} };
+const BUY_SOON_DAYS = 7;
+const limitPrice = (p) => Math.ceil(n(p) * 1.003 * 100) / 100;
+
+function nextBuy(plan, today = new Date()) {
+  const months = (plan.months || []).map(Number).filter((m) => m >= 1 && m <= 12);
+  if (!months.length || !n(plan.quarterly) && !n(plan.janExtra)) return null;
+  for (let k = -1; k < 14; k++) {
+    let mm = today.getMonth() + 1 + k, yy = today.getFullYear();
+    while (mm > 12) { mm -= 12; yy += 1; }
+    while (mm < 1) { mm += 12; yy -= 1; }
+    if (!months.includes(mm)) continue;
+    const key = `${yy}-${String(mm).padStart(2, "0")}`;
+    if (plan.done?.[key]) continue;
+    const start = new Date(yy, mm - 1, 1), end = new Date(yy, mm, 0);
+    const left = daysBetween(today, start), endLeft = daysBetween(today, end);
+    const status = endLeft < 0 ? "late" : left <= 0 ? "due" : left <= BUY_SOON_DAYS ? "soon" : "later";
+    return { key, start, end, left, status, amountHKD: n(plan.quarterly) + (mm === 1 ? n(plan.janExtra) : 0) };
+  }
+  return null;
+}
+
+function investInfo(planIn, ibkr, rates) {
+  const plan = { ...INVEST_DEFAULT, ...(planIn || {}) };
+  const snap = ibkr?.snapshot || null;
+  const data = snap?.data || {};
+  const fx = n(data.fx_usd) || n(rates?.USD) || 7.8;
+  const pos = (data.positions || []).map((p) => {
+    const cost = n(p.qty) * n(p.avg), pnl = n(p.value) - cost;
+    return { ...p, cost, pnl, pnlPct: cost ? (pnl / cost) * 100 : 0 };
+  });
+  const valueUSD = pos.reduce((a, p) => a + n(p.value), 0);
+  const costUSD = pos.reduce((a, p) => a + p.cost, 0);
+  const cashUSD = n(data.cash_usd) + n(data.cash_hkd) / fx;
+  const navHKD = snap ? (n(data.nav_hkd) || (valueUSD + cashUSD) * fx) : 0;
+  const pnlUSD = valueUSD - costUSD;
+  const pnlPct = costUSD ? (pnlUSD / costUSD) * 100 : 0;
+  const A = pos.find((p) => p.symbol === plan.fundA), B = pos.find((p) => p.symbol === plan.fundB);
+  const aVal = n(A?.value), bVal = n(B?.value);
+  const weightA = aVal + bVal ? (aVal / (aVal + bVal)) * 100 : 0;
+  const ageDays = snap ? (Date.now() - new Date(snap.as_of).getTime()) / DAY : Infinity;
+
+  const hist = (ibkr?.history || []).map((h) => {
+    const v = n(h.value_usd), c = n(h.cost_usd);
+    return { day: h.day, value: Math.round(v), cost: Math.round(c), pct: c ? +(((v - c) / c) * 100).toFixed(2) : 0 };
+  });
+  const lastH = hist[hist.length - 1], prevH = hist[hist.length - 2];
+  const dayChange = lastH && prevH ? (lastH.value - lastH.cost) - (prevH.value - prevH.cost) : null;
+
+  const nb = nextBuy(plan);
+  let buy = null;
+  if (nb) {
+    // Spend the new money (plus idle USD cash, less ~US$5 for fees) so the
+    // split moves toward the target without selling anything.
+    const usd = Math.max(0, nb.amountHKD / fx + n(data.cash_usd) - 5);
+    const p = n(plan.targetPct) / 100;
+    const total = aVal + bVal + usd;
+    const buyA = Math.min(usd, Math.max(0, total * p - aVal)), buyB = usd - buyA;
+    const leg = (fund, amt) => {
+      const price = n(fund?.price), lim = price ? limitPrice(price) : 0;
+      const shares = lim ? Math.floor(amt / lim) : 0;
+      return { amt, price, lim, shares, spend: shares * lim };
+    };
+    const la = leg(A, buyA), lb = leg(B, buyB);
+    const afterA = aVal + la.shares * la.price, afterB = bVal + lb.shares * lb.price;
+    buy = { ...nb, usd, a: la, b: lb, weightAfter: afterA + afterB ? (afterA / (afterA + afterB)) * 100 : 0 };
+  }
+  return { plan, snap, fx, pos, valueUSD, costUSD, cashUSD, navHKD, pnlUSD, pnlPct, A, B, weightA, ageDays, hist, dayChange, buy };
+}
+
 /* ════════════════════════════════════════════════════════════ */
 export default function Passbook({ lang = "zh", onSignOut }) {
   const [st, setSt] = useState(null);
@@ -250,7 +326,10 @@ export default function Passbook({ lang = "zh", onSignOut }) {
   const first = useRef(true);
   const L = (key) => t(lang, key);
 
+  const [ibkr, setIbkr] = useState(null);
   useEffect(() => { (async () => setSt((await load()) || SEED))(); }, []);
+  // Read-only: IBKR prices come from the daily server-side sync, never saved back from here.
+  useEffect(() => { window.ibkrData?.().then(setIbkr).catch(() => setIbkr(null)); }, []);
   useEffect(() => {
     if (!st) return;
     if (first.current) { first.current = false; return; }
@@ -295,7 +374,9 @@ export default function Passbook({ lang = "zh", onSignOut }) {
 
     const cashHKD = n(st.cash?.balance);
     const debtHKD = (st.debts || []).reduce((a, x) => a + toHKD(x.balance, x.ccy || "HKD", rates), 0);
-    const netWorth = depHKD + n(st.portfolio.value) + cashHKD - debtHKD;
+    const inv = investInfo(st.invest, ibkr, rates);
+    const investedHKD = n(st.portfolio.value) + inv.navHKD;
+    const netWorth = depHKD + investedHKD + cashHKD - debtHKD;
     const emergencyTarget = plannedExp * n(st.settings.emergencyMonths);
     const cover = plannedExp ? depHKD / plannedExp : 0;
 
@@ -309,13 +390,13 @@ export default function Passbook({ lang = "zh", onSignOut }) {
       income, plannedExp, plannedSave, essentials, surplus: income - plannedExp - plannedSave,
       months, goalTarget, goalNow, live, depHKD, usdHKD, cnyHKD, blended, idle, nextManual, due30,
       perBank, banks, avgSave, netWorth, emergencyTarget, cover, rates, cashHKD, debtHKD,
-      subs, subsMonthly, dueDeps, dueSubs,
+      subs, subsMonthly, dueDeps, dueSubs, inv, investedHKD,
     };
-  }, [st]);
+  }, [st, ibkr]);
 
   if (!st || !d) return <div style={{ padding: 40, fontFamily: MONO, color: C.ink2, background: C.paper }}>{L("Opening Passbook…")}</div>;
 
-  const TABS = [["overview", L("Overview")], ["grow", L("Grow")], ["deposits", L("Deposits")], ["subs", L("Subscriptions")], ["month", L("Month")], ["budget", L("Plan")], ["goals", L("Goals")]];
+  const TABS = [["overview", L("Overview")], ["grow", L("Grow")], ["invest", L("Invest")], ["deposits", L("Deposits")], ["subs", L("Subscriptions")], ["month", L("Month")], ["budget", L("Plan")], ["goals", L("Goals")]];
 
   return (
     <div className="pb-root" style={{ background: C.paper, color: C.ink, minHeight: "100vh" }}>
@@ -366,6 +447,7 @@ export default function Passbook({ lang = "zh", onSignOut }) {
         {tab === "grow" && <Grow st={st} d={d} up={up} lang={lang} />}
         {tab === "deposits" && <Deposits st={st} d={d} up={up} lang={lang} />}
         {tab === "subs" && <Subs st={st} d={d} up={up} lang={lang} />}
+        {tab === "invest" && <Invest st={st} d={d} up={up} lang={lang} />}
         {tab === "month" && <Month st={st} d={d} up={up} lang={lang} />}
         {tab === "budget" && <Plan st={st} d={d} up={up} lang={lang} />}
         {tab === "goals" && <Goals st={st} d={d} up={up} lang={lang} />}
@@ -437,7 +519,8 @@ function Overview({ st, d, go, lang }) {
       <div className="grid grid-cols-2 gap-3">
         <Stat label={L("On deposit")} v={d.depHKD} accent={C.jade} sub={tr(`${d.live.length} 筆 · ${d.banks.length} 間銀行`, `${d.live.length} live · ${d.banks.length} banks`)} />
         <Stat label={L("Blended yield")} v={d.blended.toFixed(2)} prefix="" accent={C.gold} sub={L("% a year, weighted")} />
-        <Stat label={L("Invested")} v={st.portfolio.value} accent={n(st.portfolio.value) ? C.blue : C.red} sub={n(st.portfolio.value) ? L("market value") : L("nothing compounding yet")} />
+        <Stat label={L("Invested")} v={d.investedHKD} accent={d.investedHKD ? C.blue : C.red}
+          sub={d.inv.snap ? tr(`回報 ${d.inv.pnlPct >= 0 ? "+" : ""}${d.inv.pnlPct.toFixed(2)}%`, `return ${d.inv.pnlPct >= 0 ? "+" : ""}${d.inv.pnlPct.toFixed(2)}%`) : d.investedHKD ? L("market value") : L("nothing compounding yet")} />
         <Stat label={L("Kept per month")} v={d.plannedSave} accent={C.jade} sub={tr(`收入的 ${d.income ? ((d.plannedSave / d.income) * 100).toFixed(0) : 0}%`, `${d.income ? ((d.plannedSave / d.income) * 100).toFixed(0) : 0}% of income`)} />
       </div>
 
@@ -497,6 +580,15 @@ function ComingUp({ d, go, lang }) {
       what: (x.action && String(x.action).trim()) || tr("到了要處理的日子，打開「訂閱」看詳情。", "Time to act — open Subscriptions for the details."),
       late: x.i.left < 0,
     })),
+    ...(d.inv.buy && ["soon", "due", "late"].includes(d.inv.buy.status) ? [(() => {
+      const b = d.inv.buy, p = d.inv.plan;
+      return {
+        id: "invest-" + b.key, tab: "invest", date: b.start, left: b.left, late: b.status === "late",
+        title: tr(`IBKR 季度買入 · HK$${money(b.amountHKD)}`, `IBKR quarterly buy · HK$${money(b.amountHKD)}`),
+        what: tr(`轉 HK$${money(b.amountHKD)} 到 IBKR 並換成美元，然後買約 US$${money(b.a.spend)} ${p.fundA}、US$${money(b.b.spend)} ${p.fundB}。股數和限價見「投資」頁，買完按「已完成」。`,
+          `Move HK$${money(b.amountHKD)} to IBKR and convert to USD, then buy about US$${money(b.a.spend)} of ${p.fundA} and US$${money(b.b.spend)} of ${p.fundB}. Shares and limit prices are on the Invest tab; tap Done when bought.`),
+      };
+    })()] : []),
   ].sort((a, b) => a.left - b.left);
   if (!rows.length) return null;
   return (
@@ -568,9 +660,9 @@ function Grow({ st, d, up, lang }) {
       l: tr(`存款保障計劃過去保障每個存戶每間銀行 HK$800,000（港元或外幣），定存年期五年內適用——保障金額由計劃公佈，並非即時數據，請以官方公告為準。你最大的一間是 ${biggestBank ? biggestBank.bank : "—"}——按此金額計算目前仍在保障範圍內。結構性或掛鈎存款不受保障，應避免。`, `The Deposit Protection Scheme has covered up to HK$800,000 per depositor per bank, HKD or foreign currency, on time deposits up to five years — this is a published scheme limit, not live data, so confirm the current figure officially. Your largest is ${biggestBank ? biggestBank.bank : "—"} — comfortably inside at that limit. Structured or currency-linked deposits are not covered, so avoid them.`),
     },
     {
-      t: L("Money that compounds"), s: n(st.portfolio.value) > 0 ? "good" : "act",
-      v: d.netWorth ? `${((n(st.portfolio.value) / d.netWorth) * 100).toFixed(0)}%` : "0%",
-      l: n(st.portfolio.value) > 0 ? tr("部分資金正在增長，不只是賺利息。保持每月自動買入，不用理會價格波動。", "Some of your money is growing rather than just earning. Keep the monthly buying automatic and ignore the price.")
+      t: L("Money that compounds"), s: d.investedHKD > 0 ? "good" : "act",
+      v: d.netWorth ? `${((d.investedHKD / d.netWorth) * 100).toFixed(0)}%` : "0%",
+      l: d.investedHKD > 0 ? tr("部分資金正在增長，不只是賺利息。保持每月自動買入，不用理會價格波動。", "Some of your money is growing rather than just earning. Keep the monthly buying automatic and ignore the price.")
         : tr("目前全部是現金。定存能保護資金，但不能讓它增長。預備金補滿後，這是你能做的最大改變。", "Everything sits in cash. Deposits protect money; they don't grow it. Once the cushion is full, this is the single biggest change available to you."),
     },
   ];
@@ -588,7 +680,7 @@ function Grow({ st, d, up, lang }) {
 
   const proj = useMemo(() => {
     const years = 20, rA = d.blended / 100 / 12, rB = invRate / 100 / 12;
-    let a = d.depHKD, bDep = d.depHKD, bInv = n(st.portfolio.value), gap = gapToEmergency;
+    let a = d.depHKD, bDep = d.depHKD, bInv = d.investedHKD, gap = gapToEmergency;
     const rows = [{ y: tr("現在", "now"), Deposits: Math.round(a), Split: Math.round(bDep + bInv) }];
     for (let m = 1; m <= years * 12; m++) {
       a = a * (1 + rA) + monthlySave;
@@ -597,7 +689,7 @@ function Grow({ st, d, up, lang }) {
       if (m % 12 === 0) rows.push({ y: `${m / 12}${tr("年", "y")}`, Deposits: Math.round(a), Split: Math.round(bDep + bInv) });
     }
     return rows;
-  }, [d.blended, d.depHKD, invRate, monthlySave, gapToEmergency, st.portfolio.value, lang]);
+  }, [d.blended, d.depHKD, invRate, monthlySave, gapToEmergency, d.investedHKD, lang]);
   const last = proj[proj.length - 1];
   const gap20 = last.Split - last.Deposits;
   const real20 = gap20 / Math.pow(1 + n(s.inflation) / 100, 20);
@@ -657,7 +749,7 @@ function Grow({ st, d, up, lang }) {
       l: near3yShort > d.depHKD
         ? tr(`三年內到期的目標還差 HK$${money(near3yShort)}，但你的定存總額只有 HK$${money(d.depHKD)}，不夠完全覆蓋。旅行、父母的手機、駕駛牌照——把定存年期對準用錢的日子，例如選一筆在付款前一星期到期的 6 個月定存。`, `Goals due within 3 years still need HK$${money(near3yShort)}, but your total deposits are only HK$${money(d.depHKD)} — not quite enough to cover them. Travel, parents' phone, the driving licence — match the term to the date you need it, a 6-month deposit maturing the week before you pay.`)
         : tr("三年內到期的目標，目前定存總額足以覆蓋。繼續把年期對準用錢的日子，例如選一筆在付款前一星期到期的 6 個月定存，而不是之後才到期。", "Your total deposits currently cover what's needed for goals due within 3 years. Keep matching the term to the date you need it — a 6-month deposit maturing the week before you pay, not the week after.") },
-    { n: 5, t: tr("之後所有錢，每月定投一隻環球指數基金", "Everything after that buys a global index fund, monthly"), amt: monthlySave, done: n(st.portfolio.value) > 0,
+    { n: 5, t: tr("之後所有錢，每月定投一隻環球指數基金", "Everything after that buys a global index fund, monthly"), amt: monthlySave, done: d.investedHKD > 0,
       l: tr("每月同一天、同一金額，不擇時。以現行規則，香港不徵資本增值或股息稅，愛爾蘭註冊的 UCITS 基金一般適用 15% 美股股息預扣稅（而非 30%），也有助避開美股持倉的美國遺產稅風險——稅務規則會隨時間或個人情況變動，Passbook 沒有替你核實，投資前請自行確認最新規則或諮詢專業意見。", "Same day each month, same amount, no timing. Under current rules, Hong Kong charges no tax on capital gains or dividends, and an Irish-domiciled UCITS fund generally sees 15% US dividend withholding instead of 30%, which also helps avoid US estate-tax exposure on US-listed holdings — tax rules change over time and by individual circumstance, and Passbook hasn't verified any of this for you, so confirm the current rules yourself or get professional advice before investing.") },
     { n: 6, t: tr("然後專注提升收入，而非追逐利率", "Then push income, not yield"), amt: null, done: false,
       l: tr(`以你目前的餘額，多 1% 利率只值 HK$${money(d.depHKD * 0.01)} 一年，而加薪 10% 是 HK$${money(d.income * 12 * 0.1)}。把時間花在後者——這正是「書籍」和「課程」這兩項預算存在的原因。`, `At your balance +1% of yield is HK$${money(d.depHKD * 0.01)} a year. A 10% raise is HK$${money(d.income * 12 * 0.1)}. Spend your evenings on the second one — that's what the books and courses line is for.`) },
@@ -740,7 +832,7 @@ function Grow({ st, d, up, lang }) {
       </Card>
 
       <Card accent={C.blue}>
-        <Eyebrow color={C.blue}>{L("Portfolio")}</Eyebrow>
+        <Eyebrow color={C.blue}>{tr("其他投資（IBKR 以外）", "Other investments (outside IBKR)")}</Eyebrow>
         <div className="grid grid-cols-2 gap-2 mt-2">
           <Lbl t={L("Market value HK$")}><TextIn type="number" right value={st.portfolio.value} onChange={(v) => up((x) => { x.portfolio.value = v; })} /></Lbl>
           <Lbl t={L("Buying per month")}><TextIn type="number" right value={st.portfolio.monthly} onChange={(v) => up((x) => { x.portfolio.monthly = v; })} /></Lbl>
@@ -1211,6 +1303,210 @@ function Plan({ st, d, up, lang }) {
             : d.surplus < 0 ? L("The plan spends more than it earns. Trim a line or lower a savings target.")
               : L("Spare each month. Send it to a goal on the day you're paid, before it drifts.")}
         </div>
+      </Card>
+    </div>
+  );
+}
+
+/* ── INVEST: IBKR holdings, return, and the next scheduled buy ── */
+function Invest({ st, d, up, lang }) {
+  const tr = (zh, en) => (lang === "zh" ? zh : en);
+  const v = d.inv, p = v.plan, b = v.buy;
+  const sign = (x) => (x > 0 ? "+" : x < 0 ? "−" : "");
+  const pnlTone = (x) => (x > 0 ? C.jade : x < 0 ? C.red : C.ink2);
+  const usd = (x, dp = 2) => `${sign(x)}US$${money(Math.abs(x), dp)}`;
+  const pct = (x) => `${sign(x)}${Math.abs(x).toFixed(2)}%`;
+  const setPlan = (fn) => up((s) => { s.invest = { ...INVEST_DEFAULT, ...(s.invest || {}) }; fn(s.invest); });
+  const doneKeys = Object.keys(p.done || {}).sort().reverse();
+  const asOf = v.snap ? new Date(v.snap.as_of) : null;
+  const stale = v.ageDays > 3;
+  const offTarget = v.snap && Math.abs(v.weightA - n(p.targetPct)) > 5;
+
+  if (!v.snap) {
+    return (
+      <Card accent={C.gold}>
+        <Eyebrow color={C.gold}>{tr("未有 IBKR 數據", "No IBKR data yet")}</Eyebrow>
+        <div style={{ fontSize: 13, color: C.ink2, marginTop: 6, lineHeight: 1.5 }}>
+          {tr("每日同步會在早上把 IBKR 的持倉和價格寫進來。第一次同步後，這裡會顯示持倉、回報和下一次買入。", "A daily sync writes your IBKR holdings and prices here each morning. After the first one, this tab shows holdings, return and your next buy.")}
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card accent={pnlTone(v.pnlUSD)}>
+        <div className="flex justify-between items-start gap-3">
+          <div style={{ minWidth: 0 }}>
+            <Eyebrow>{tr("IBKR 帳戶總值", "IBKR account value")}</Eyebrow>
+            <div className="mt-1"><Num value={money(v.navHKD)} prefix="HK$" size={24} weight={800} wrap /></div>
+            <div style={{ fontSize: 11.5, color: C.ink2, fontFamily: MONO }}>≈ US${money(v.valueUSD + v.cashUSD, 2)}</div>
+          </div>
+          <div className="text-right pb-shrink0">
+            <Eyebrow>{tr("總回報", "Total return")}</Eyebrow>
+            <div className="mt-1"><Num value={pct(v.pnlPct)} size={22} weight={800} color={pnlTone(v.pnlUSD)} /></div>
+            <div style={{ fontSize: 11.5, color: pnlTone(v.pnlUSD), fontFamily: MONO }}>{usd(v.pnlUSD)}</div>
+          </div>
+        </div>
+        <div className="grid grid-cols-3 gap-2 mt-3 pt-3" style={{ borderTop: `1px solid ${C.rule}` }}>
+          <div><Eyebrow>{tr("投入成本", "Cost")}</Eyebrow><Num value={`US$${money(v.costUSD)}`} size={13} weight={700} wrap /></div>
+          <div><Eyebrow>{tr("持倉市值", "Holdings")}</Eyebrow><Num value={`US$${money(v.valueUSD)}`} size={13} weight={700} wrap /></div>
+          <div><Eyebrow>{tr("較上次", "Since last")}</Eyebrow>
+            {v.dayChange === null ? <span style={{ fontSize: 12, color: C.ink2 }}>—</span> : <Num value={usd(v.dayChange)} size={13} weight={700} color={pnlTone(v.dayChange)} wrap />}
+          </div>
+        </div>
+        <div style={{ fontSize: 11, color: stale ? C.red : C.ink2, marginTop: 10, fontWeight: stale ? 700 : 400 }}>
+          {stale
+            ? tr(`IBKR 數據停在 ${fmtDate(asOf, lang)}——每日同步可能沒有運行。`, `IBKR data is from ${fmtDate(asOf, lang)} — the daily sync may not be running.`)
+            : tr(`IBKR 價格 · 更新於 ${asOf.toLocaleString("zh-Hant", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })} · 每日自動更新`, `IBKR prices · updated ${asOf.toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })} · refreshes daily`)}
+        </div>
+      </Card>
+
+      <Card pad="p-0">
+        <div className="p-3" style={{ paddingBottom: 4 }}><Eyebrow>{tr("持倉", "Holdings")}</Eyebrow></div>
+        {v.pos.map((x) => (
+          <div key={x.conid || x.symbol} className="pb-row" style={{ padding: "10px 12px" }}>
+            <div className="flex justify-between items-baseline gap-2">
+              <span style={{ fontWeight: 800, fontSize: 14 }}>{x.symbol} <span style={{ color: C.ink2, fontWeight: 500, fontSize: 12 }}>{n(x.qty)} {tr("股", "sh")}</span></span>
+              <Num value={`US$${money(x.value, 2)}`} size={13.5} weight={800} />
+            </div>
+            <div className="flex justify-between items-baseline gap-2 mt-1">
+              <span style={{ fontSize: 11.5, color: C.ink2, fontFamily: MONO }}>
+                {tr("平均", "avg")} {n(x.avg).toFixed(3)} → {n(x.price).toFixed(3)}
+              </span>
+              <span style={{ fontSize: 12, fontFamily: MONO, fontWeight: 700, color: pnlTone(x.pnl), whiteSpace: "nowrap" }}>{usd(x.pnl)} · {pct(x.pnlPct)}</span>
+            </div>
+          </div>
+        ))}
+        {v.cashUSD > 0.5 && (
+          <div className="flex justify-between p-3" style={{ fontSize: 12, color: C.ink2 }}>
+            <span>{tr("現金", "Cash")}</span><span style={{ fontFamily: MONO }}>US${money(v.cashUSD, 2)}</span>
+          </div>
+        )}
+      </Card>
+
+      <Card accent={offTarget ? C.gold : C.blue}>
+        <div className="flex justify-between items-baseline gap-2">
+          <Eyebrow color={offTarget ? C.gold : C.blue}>{tr("比例", "Split")}</Eyebrow>
+          <span style={{ fontSize: 12, color: C.ink2 }}>{tr(`目標 ${p.fundA} ${n(p.targetPct)}%`, `target ${p.fundA} ${n(p.targetPct)}%`)}</span>
+        </div>
+        <div className="flex mt-2" style={{ height: 10, borderRadius: 2, overflow: "hidden", background: "#DFE6DF", position: "relative" }}>
+          <div style={{ width: `${v.weightA}%`, background: C.jade }} />
+          <div style={{ flex: 1, background: C.blue }} />
+          <div style={{ position: "absolute", left: `${n(p.targetPct)}%`, top: -2, bottom: -2, width: 2, background: C.ink }} />
+        </div>
+        <div className="flex justify-between mt-1" style={{ fontSize: 12, fontFamily: MONO }}>
+          <span style={{ color: C.jade, fontWeight: 700 }}>{p.fundA} {v.weightA.toFixed(1)}%</span>
+          <span style={{ color: C.blue, fontWeight: 700 }}>{p.fundB} {(100 - v.weightA).toFixed(1)}%</span>
+        </div>
+        {offTarget && (
+          <div style={{ fontSize: 12, color: C.ink2, marginTop: 6, lineHeight: 1.5 }}>
+            {tr("偏離目標超過 5%。下一次買入會先補少了的一隻，不用賣出。", "More than 5 points off target. The next buy tops up the underweight fund first, so you don't need to sell.")}
+          </div>
+        )}
+      </Card>
+
+      {b && (
+        <Card accent={b.status === "late" ? C.red : ["due", "soon"].includes(b.status) ? C.gold : C.jade}>
+          <div className="flex justify-between items-start gap-2">
+            <div style={{ minWidth: 0 }}>
+              <Eyebrow color={b.status === "late" ? C.red : C.gold}>{tr("下一次買入", "Next buy")}</Eyebrow>
+              <div className="mt-1" style={{ fontSize: 16, fontWeight: 800 }}>
+                {new Date(b.start).toLocaleDateString(lang === "zh" ? "zh-Hant" : "en-GB", { month: "long", year: "numeric" })} · HK${money(b.amountHKD)}
+              </div>
+              <div style={{ fontSize: 11.5, color: C.ink2, fontFamily: MONO }}>≈ US${money(b.usd, 2)} {tr("（已扣約 US$5 手續費，並計入戶口現金）", "(after ~US$5 fees, incl. idle cash)")}</div>
+            </div>
+            <span className="pb-shrink0">
+              <Chip tone={b.status === "late" ? "red" : b.status === "later" ? "jade" : "gold"}>
+                {b.status === "late" ? tr("逾期", "overdue") : b.status === "due" ? tr("本月", "this month") : `${b.left}${tr("日", "d")}`}
+              </Chip>
+            </span>
+          </div>
+          <table className="mt-3" style={{ width: "100%", fontSize: 12.5, borderCollapse: "collapse", fontVariantNumeric: "tabular-nums" }}>
+            <thead>
+              <tr style={{ color: C.ink2, fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".08em" }}>
+                <th style={{ textAlign: "left", paddingBottom: 4 }}>{tr("基金", "Fund")}</th>
+                <th style={{ textAlign: "right" }}>{tr("金額", "Amount")}</th>
+                <th style={{ textAlign: "right" }}>{tr("股數", "Shares")}</th>
+                <th style={{ textAlign: "right" }}>{tr("限價", "Limit")}</th>
+              </tr>
+            </thead>
+            <tbody style={{ fontFamily: MONO }}>
+              {[[p.fundA, b.a], [p.fundB, b.b]].map(([f, l]) => (
+                <tr key={f} style={{ borderTop: `1px solid ${C.rule}` }}>
+                  <td style={{ padding: "6px 0", fontWeight: 800, fontFamily: "inherit" }}>{f}</td>
+                  <td style={{ textAlign: "right" }}>US${money(l.spend, 0)}</td>
+                  <td style={{ textAlign: "right", fontWeight: 800 }}>{l.shares}</td>
+                  <td style={{ textAlign: "right" }}>{l.lim ? l.lim.toFixed(2) : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ fontSize: 12, color: C.ink2, marginTop: 8, lineHeight: 1.55 }}>
+            {tr(`買入後 ${p.fundA} 約佔 ${b.weightAfter.toFixed(0)}%。`, `After buying, ${p.fundA} is about ${b.weightAfter.toFixed(0)}%.`)}{" "}
+            {tr("步驟：①由銀行轉港元到 IBKR；②在 IBKR 換成美元；③兩隻都落限價單（交易所 LSEETF、貨幣 USD、生效時間「天」），按預覽確認「交易後」不是負數才提交。股數按最新收市價計，下單前用當時價格再算一次。",
+              "Steps: ① move the HKD from your bank to IBKR; ② convert it to USD in IBKR; ③ place both as limit orders (exchange LSEETF, currency USD, time-in-force Day), and check the preview's 'after' column isn't negative before submitting. Share counts use the last synced price, so recheck against the live price when you order.")}
+          </div>
+          <div className="flex gap-2 mt-3 flex-wrap">
+            <Btn size="sm" tone="solid" onClick={() => setPlan((x) => { x.done = { ...(x.done || {}), [b.key]: todayISO() }; })}>{tr("已完成這次買入", "Done — bought this one")}</Btn>
+          </div>
+        </Card>
+      )}
+
+      <Card accent={C.gold}>
+        <Eyebrow color={C.gold}>{tr("回報走勢", "Return over time")}</Eyebrow>
+        {v.hist.length >= 2 ? (
+          <>
+            <div style={{ fontSize: 11.5, color: C.ink2, margin: "2px 0 8px" }}>{tr("持倉市值對比投入成本（美元），每日一點。", "Holdings value against what you paid (USD), one point a day.")}</div>
+            <div style={{ height: 200 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={v.hist} margin={{ top: 4, right: 18, left: 0, bottom: 0 }}>
+                  <CartesianGrid stroke={C.rule} vertical={false} />
+                  <XAxis dataKey="day" tick={{ fontSize: 10, fill: C.ink2, fontFamily: MONO }} tickFormatter={(x) => String(x).slice(5)} tickLine={false} axisLine={{ stroke: C.rule }} minTickGap={24} />
+                  <YAxis tick={{ fontSize: 10, fill: C.ink2, fontFamily: MONO }} tickFormatter={(x) => money(x)} width={46} tickLine={false} axisLine={false} domain={["auto", "auto"]} />
+                  <Tooltip contentStyle={{ background: C.card, border: `1px solid ${C.rule}`, borderRadius: 2, fontSize: 12, fontFamily: MONO }}
+                    formatter={(val, name) => ["US$" + money(val), name]} labelFormatter={(l) => { const h = v.hist.find((r) => r.day === l); return `${l} · ${h ? pct(h.pct) : ""}`; }} />
+                  <Line type="stepAfter" dataKey="cost" name={tr("投入成本", "Cost")} stroke={C.ink2} strokeWidth={1.5} strokeDasharray="4 3" dot={false} />
+                  <Line type="monotone" dataKey="value" name={tr("市值", "Value")} stroke={C.jade} strokeWidth={2.5} dot={false} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </>
+        ) : (
+          <div style={{ fontSize: 12.5, color: C.ink2, marginTop: 4, lineHeight: 1.5 }}>
+            {tr(`由 ${v.hist[0]?.day || "今日"} 開始記錄，每日加一點。有兩日數據後就會顯示走勢圖。`, `Recording since ${v.hist[0]?.day || "today"}, one point a day. The chart appears once there are two days of data.`)}
+          </div>
+        )}
+        <div style={{ fontSize: 11, color: C.ink2, marginTop: 8, lineHeight: 1.5 }}>
+          {tr("回報 =（市值 − 投入成本）÷ 投入成本，按 IBKR 的平均成本計算，未計已收取的股息（兩隻都是累積型，股息已滾存在價格內）。港元與美元掛鈎，所以不另計匯率盈虧。",
+            "Return = (value − cost) ÷ cost, using IBKR's average cost. Both funds are accumulating, so dividends are already inside the price. HKD is pegged to USD, so no separate FX gain or loss is counted.")}
+        </div>
+      </Card>
+
+      <Card accent={C.blue}>
+        <Eyebrow color={C.blue}>{tr("買入計劃", "Buy plan")}</Eyebrow>
+        <div className="grid grid-cols-2 gap-2 mt-2">
+          <Lbl t={tr(`${p.fundA} 目標 %`, `${p.fundA} target %`)}><TextIn type="number" right value={p.targetPct} onChange={(x) => setPlan((s) => { s.targetPct = x; })} /></Lbl>
+          <Lbl t={tr("每次買入 HK$", "Each buy HK$")}><TextIn type="number" right value={p.quarterly} onChange={(x) => setPlan((s) => { s.quarterly = x; })} /></Lbl>
+          <Lbl t={tr("買入月份", "Buy months")}>
+            <TextIn value={(p.months || []).join(", ")} placeholder="1, 4, 7, 10"
+              onChange={(x) => setPlan((s) => { s.months = String(x).split(/[^0-9]+/).map(Number).filter((m) => m >= 1 && m <= 12); })} />
+          </Lbl>
+          <Lbl t={tr("一月額外（雙糧/花紅）HK$", "Extra in January HK$")}><TextIn type="number" right value={p.janExtra} onChange={(x) => setPlan((s) => { s.janExtra = x; })} /></Lbl>
+        </div>
+        {doneKeys.length > 0 && (
+          <div className="mt-3" style={{ fontSize: 12, color: C.ink2 }}>
+            {tr("已完成：", "Done: ")}
+            {doneKeys.slice(0, 6).map((k) => (
+              <button key={k} className="pb-btn" onClick={() => setPlan((s) => { const dn = { ...(s.done || {}) }; delete dn[k]; s.done = dn; })}
+                title={tr("按一下撤銷", "Tap to undo")}
+                style={{ background: "transparent", border: `1px solid ${C.rule}`, color: C.ink2, fontSize: 11, padding: "2px 7px", marginRight: 6, marginTop: 4 }}>
+                {k} ✕
+              </button>
+            ))}
+          </div>
+        )}
       </Card>
     </div>
   );
