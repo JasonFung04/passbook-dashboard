@@ -62,6 +62,7 @@ const SEED = {
   portfolio: { value: 0, monthly: 0, note: "" },
   cash: { balance: 0, note: "" },
   debts: [],
+  subs: [],
   snapshots: [],
   income: [{ id: uid(), source: "Monthly salary", amount: 18000, ccy: "HKD" }],
   budget: [
@@ -119,6 +120,7 @@ function migrate(s) {
   if (!s.snapshots) s.snapshots = [];
   if (!s.cash) s.cash = { balance: 0, note: "" };
   if (!s.debts) s.debts = [];
+  if (!s.subs) s.subs = [];
   s.tx = (s.tx || []).map((t) => ({ ccy: "HKD", ...t }));
   s.income = (s.income || []).map((r) => ({ ccy: "HKD", ...r }));
   s.budget = (s.budget || []).map((r) => ({ ccy: "HKD", ...r }));
@@ -212,6 +214,34 @@ function depInfo(d, rates) {
   };
 }
 
+// What to do when a deposit comes due. A deposit's own `plan` text wins;
+// otherwise a generic checklist that works for any deposit.
+const DUE_DAYS = 14;
+const depPlan = (x, lang) => (x.plan && String(x.plan).trim()) || (lang === "zh"
+  ? "到期前：比較三間銀行當週的定存利率（新資金優惠通常較高），決定續存、轉走還是留在活期；處理好後在這裏按「續存」或「結束」，讓數字保持準確。"
+  : "Before it matures: compare this week's rates at your banks (new-money offers are usually higher), decide whether to renew, move it or keep it in savings, then tap Renew or Close here so the figures stay right.");
+
+/* ── subscription maths ──────────────────────────────────────── */
+// A subscription, contract or warranty. The "act by" date is the notice
+// deadline when there is one (e.g. return a SIM a month before the
+// contract ends), otherwise the end date itself.
+const SUB_KINDS = ["subscription", "contract", "warranty"];
+const SUB_CYCLES = ["monthly", "yearly", "one-off"];
+function subInfo(x, rates) {
+  const cyc = x.cycle || "monthly";
+  const amtHKD = toHKD(x.amount, x.ccy || "HKD", rates);
+  const monthlyHKD = cyc === "monthly" ? amtHKD : cyc === "yearly" ? amtHKD / 12 : 0;
+  const end = validDate(x.end) || (x.start && n(x.termMonths) ? addMonths(x.start, n(x.termMonths)) : null);
+  const notice = end && n(x.noticeMonths) ? addMonths(iso(end), -n(x.noticeMonths)) : null;
+  const actBy = notice || end;
+  const remind = n(x.remindDays) || 30;
+  const left = actBy ? daysBetween(new Date(), actBy) : NaN;
+  const endLeft = end ? daysBetween(new Date(), end) : NaN;
+  const status = !actBy ? "ongoing" : endLeft < 0 ? "ended" : left < 0 ? "late" : left <= remind ? "due" : "running";
+  const remindFrom = actBy ? new Date(actBy.getTime() - remind * DAY) : null;
+  return { monthlyHKD, end, endISO: iso(end), notice, actBy, actByISO: iso(actBy), remindFrom, left, endLeft, remind, status };
+}
+
 /* ════════════════════════════════════════════════════════════ */
 export default function Passbook({ lang = "zh", onSignOut }) {
   const [st, setSt] = useState(null);
@@ -269,16 +299,23 @@ export default function Passbook({ lang = "zh", onSignOut }) {
     const emergencyTarget = plannedExp * n(st.settings.emergencyMonths);
     const cover = plannedExp ? depHKD / plannedExp : 0;
 
+    const subs = (st.subs || []).filter((x) => !x.closed).map((x) => ({ ...x, i: subInfo(x, rates) }))
+      .sort((a, b) => (Number.isNaN(a.i.left) ? 1e9 : a.i.left) - (Number.isNaN(b.i.left) ? 1e9 : b.i.left));
+    const subsMonthly = subs.filter((x) => x.i.status !== "ended").reduce((a, x) => a + x.i.monthlyHKD, 0);
+    const dueDeps = live.filter((x) => !x.autoRenew && (x.i.status === "due" || x.i.status === "matured"));
+    const dueSubs = subs.filter((x) => x.i.status === "due" || x.i.status === "late");
+
     return {
       income, plannedExp, plannedSave, essentials, surplus: income - plannedExp - plannedSave,
       months, goalTarget, goalNow, live, depHKD, usdHKD, cnyHKD, blended, idle, nextManual, due30,
       perBank, banks, avgSave, netWorth, emergencyTarget, cover, rates, cashHKD, debtHKD,
+      subs, subsMonthly, dueDeps, dueSubs,
     };
   }, [st]);
 
   if (!st || !d) return <div style={{ padding: 40, fontFamily: MONO, color: C.ink2, background: C.paper }}>{L("Opening Passbook…")}</div>;
 
-  const TABS = [["overview", L("Overview")], ["grow", L("Grow")], ["deposits", L("Deposits")], ["month", L("Month")], ["budget", L("Plan")], ["goals", L("Goals")]];
+  const TABS = [["overview", L("Overview")], ["grow", L("Grow")], ["deposits", L("Deposits")], ["subs", L("Subscriptions")], ["month", L("Month")], ["budget", L("Plan")], ["goals", L("Goals")]];
 
   return (
     <div className="pb-root" style={{ background: C.paper, color: C.ink, minHeight: "100vh" }}>
@@ -328,6 +365,7 @@ export default function Passbook({ lang = "zh", onSignOut }) {
         {tab === "overview" && <Overview st={st} d={d} go={setTab} lang={lang} />}
         {tab === "grow" && <Grow st={st} d={d} up={up} lang={lang} />}
         {tab === "deposits" && <Deposits st={st} d={d} up={up} lang={lang} />}
+        {tab === "subs" && <Subs st={st} d={d} up={up} lang={lang} />}
         {tab === "month" && <Month st={st} d={d} up={up} lang={lang} />}
         {tab === "budget" && <Plan st={st} d={d} up={up} lang={lang} />}
         {tab === "goals" && <Goals st={st} d={d} up={up} lang={lang} />}
@@ -395,6 +433,7 @@ function Overview({ st, d, go, lang }) {
         </Card>
       )}
 
+      <ComingUp d={d} go={go} lang={lang} />
       <div className="grid grid-cols-2 gap-3">
         <Stat label={L("On deposit")} v={d.depHKD} accent={C.jade} sub={tr(`${d.live.length} 筆 · ${d.banks.length} 間銀行`, `${d.live.length} live · ${d.banks.length} banks`)} />
         <Stat label={L("Blended yield")} v={d.blended.toFixed(2)} prefix="" accent={C.gold} sub={L("% a year, weighted")} />
@@ -440,6 +479,44 @@ function Overview({ st, d, go, lang }) {
         <Btn onClick={() => go("month")}>{L("Log an entry")}</Btn>
       </div>
     </div>
+  );
+}
+
+/* ── COMING UP: deposits and subscriptions that need a decision ── */
+function ComingUp({ d, go, lang }) {
+  const tr = (zh, en) => (lang === "zh" ? zh : en);
+  const rows = [
+    ...d.dueDeps.map((x) => ({
+      id: x.id, tab: "deposits", date: x.i.maturity, left: x.i.left,
+      title: `${x.bank} · ${ccySign(x.ccy)}${money(x.principal)} ${tr("定存", "deposit")}`,
+      what: depPlan(x, lang), late: x.i.left <= 0,
+    })),
+    ...d.dueSubs.map((x) => ({
+      id: x.id, tab: "subs", date: x.i.actBy, left: x.i.left,
+      title: x.name || tr("未命名", "Untitled"),
+      what: (x.action && String(x.action).trim()) || tr("到了要處理的日子，打開「訂閱」看詳情。", "Time to act — open Subscriptions for the details."),
+      late: x.i.left < 0,
+    })),
+  ].sort((a, b) => a.left - b.left);
+  if (!rows.length) return null;
+  return (
+    <Card accent={C.gold}>
+      <Eyebrow color={C.gold}>{tr("即將要處理", "Coming up")}</Eyebrow>
+      <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 2 }}>
+        {tr(`${DUE_DAYS} 日內到期的定存，以及到了提醒時間的訂閱`, `Deposits maturing within ${DUE_DAYS} days, and subscriptions inside their reminder window`)}
+      </div>
+      {rows.map((r) => (
+        <button key={r.id} onClick={() => go(r.tab)} className="pb-tab pb-row"
+          style={{ display: "block", width: "100%", background: "none", border: "none", borderBottom: `1px solid ${C.rule}`, padding: "10px 0", textAlign: "left", cursor: "pointer", color: C.ink }}>
+          <div className="flex justify-between items-baseline gap-2">
+            <span className="pb-ellipsis" style={{ fontWeight: 800, fontSize: 13.5, flex: "1 1 auto" }}>{r.title}</span>
+            <span className="pb-shrink0"><Chip tone={r.late ? "red" : "gold"}>{r.left <= 0 ? (r.left === 0 ? tr("今日", "today") : tr(`過了 ${-r.left} 日`, `${-r.left}d ago`)) : `${r.left}${tr("日", "d")}`}</Chip></span>
+          </div>
+          <div style={{ fontSize: 11.5, color: C.ink2, fontFamily: MONO, marginTop: 2 }}>{fmtDate(r.date, lang)}</div>
+          <div style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 4, whiteSpace: "pre-line" }}>{r.what}</div>
+        </button>
+      ))}
+    </Card>
   );
 }
 
@@ -800,6 +877,11 @@ function Deposits({ st, d, up, lang }) {
                   </span>
                 </div>
                 <div className="mt-2"><Bar2 pct={x.i.pct} color={tone} h={4} /></div>
+                {!x.autoRenew && (x.i.status === "due" || x.i.status === "matured") && (
+                  <div style={{ marginTop: 8, padding: "7px 9px", background: x.i.status === "matured" ? C.redSoft : C.goldSoft, borderRadius: 2, fontSize: 12, lineHeight: 1.5, color: C.ink, whiteSpace: "pre-line" }}>
+                    <b style={{ color: x.i.status === "matured" ? C.red : C.gold }}>{tr("到期安排：", "At maturity: ")}</b>{depPlan(x, lang)}
+                  </div>
+                )}
               </button>
 
               {isOpen && (
@@ -828,6 +910,12 @@ function Deposits({ st, d, up, lang }) {
                     </label>
                   </div>
                   <input className="pb-in mt-2" style={{ width: "100%", fontSize: 12 }} placeholder={L("Note")} value={x.note || ""} onChange={(e) => up((s) => { s.deposits[i].note = e.target.value; })} />
+                  <div className="mt-2">
+                    <Lbl t={tr(`到期安排（到期前 ${DUE_DAYS} 日開始顯示）`, `At maturity, do this (shown from ${DUE_DAYS} days before)`)}>
+                      <textarea className="pb-in" rows={3} style={{ width: "100%", fontSize: 12, resize: "vertical", fontFamily: "inherit" }}
+                        placeholder={depPlan({}, lang)} value={x.plan || ""} onChange={(e) => up((s) => { s.deposits[i].plan = e.target.value; })} />
+                    </Lbl>
+                  </div>
                   <div className="flex gap-2 mt-3 flex-wrap">
                     <Btn size="sm" tone={x.i.status === "running" ? "quiet" : "gold"}
                       onClick={() => up((s) => { s.deposits[i].principal = Math.round((n(x.principal) + x.i.interest) * 100) / 100; s.deposits[i].start = x.i.maturityISO; })}>
@@ -1124,6 +1212,167 @@ function Plan({ st, d, up, lang }) {
               : L("Spare each month. Send it to a goal on the day you're paid, before it drifts.")}
         </div>
       </Card>
+    </div>
+  );
+}
+
+/* ── SUBSCRIPTIONS: plans, contracts and warranties ──────────── */
+function Subs({ st, d, up, lang }) {
+  const tr = (zh, en) => (lang === "zh" ? zh : en);
+  const [open, setOpen] = useState(null);
+  const kindLabel = { subscription: tr("訂閱", "Subscription"), contract: tr("合約", "Contract"), warranty: tr("保養", "Warranty") };
+  const cycleLabel = { monthly: tr("每月", "a month"), yearly: tr("每年", "a year"), "one-off": tr("一次過", "one-off") };
+  const idx = (id) => (st.subs || []).findIndex((x) => x.id === id);
+  const budgetLine = st.budget.find((b) => /subscription/i.test(b.name || ""));
+  const budgetHKD = budgetLine ? toHKD(budgetLine.amount, budgetLine.ccy || "HKD", d.rates) : 0;
+  const yearly = d.subsMonthly * 12;
+  const ended = (st.subs || []).filter((x) => x.closed || subInfo(x, d.rates).status === "ended");
+
+  const add = () => up((s) => {
+    const id = uid();
+    s.subs ||= [];
+    s.subs.push({ id, name: "", kind: "subscription", amount: 0, ccy: "HKD", cycle: "monthly", start: todayISO(), termMonths: 0, end: "", noticeMonths: 0, remindDays: 30, action: "", note: "", closed: false });
+    setOpen(id);
+  });
+
+  const statusChip = (x) => {
+    const { status, left, endLeft } = x.i;
+    if (status === "ongoing") return <Chip tone="grey">{tr("持續", "ongoing")}</Chip>;
+    if (status === "ended") return <Chip tone="grey">{tr("已完結", "ended")}</Chip>;
+    if (status === "late") return <Chip tone="red">{tr(`已過期限 ${-left} 日`, `deadline passed ${-left}d`)}</Chip>;
+    if (status === "due") return <Chip tone="gold">{tr(`${left} 日內處理`, `act in ${left}d`)}</Chip>;
+    return <Chip tone="jade">{`${Math.round((x.i.notice ? left : endLeft) / 30.44)}${tr(" 個月", " mo")}`}</Chip>;
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3">
+        <Stat label={tr("每月訂閱費", "Per month")} v={d.subsMonthly} accent={C.jade}
+          sub={budgetLine ? tr(`計劃預留 HK$${money(budgetHKD)}`, `plan sets aside HK$${money(budgetHKD)}`) : tr(`一年約 HK$${money(yearly)}`, `≈ HK$${money(yearly)} a year`)} />
+        <Stat label={tr("需要處理", "Needs action")} v={d.dueSubs.length} prefix="" accent={d.dueSubs.length ? C.gold : C.ink2}
+          sub={tr("到了提醒時間", "inside reminder window")} />
+      </div>
+      {budgetLine && d.subsMonthly > budgetHKD && (
+        <div style={{ fontSize: 12.5, color: C.red, fontWeight: 700 }}>
+          {tr(`訂閱每月 HK$${money(d.subsMonthly)}，比計劃中「${budgetLine.name}」的 HK$${money(budgetHKD)} 多。到「計劃」調高預算，或取消一項。`,
+            `Subscriptions cost HK$${money(d.subsMonthly)} a month, more than the HK$${money(budgetHKD)} on your "${budgetLine.name}" budget line. Raise it on the Plan tab or cancel one.`)}
+        </div>
+      )}
+
+      <Card pad="p-0">
+        {d.subs.filter((x) => x.i.status !== "ended").map((x) => {
+          const i = idx(x.id);
+          const isOpen = open === x.id;
+          const tone = x.i.status === "late" ? C.red : x.i.status === "due" ? C.gold : x.i.status === "ongoing" ? C.blue : C.jade;
+          const showAction = (x.i.status === "due" || x.i.status === "late") && x.action;
+          return (
+            <div key={x.id} className="pb-row" style={{ borderLeft: `3px solid ${tone}` }}>
+              <button onClick={() => setOpen(isOpen ? null : x.id)} className="pb-tab"
+                style={{ width: "100%", background: "none", border: "none", padding: "10px 12px", textAlign: "left", cursor: "pointer", color: C.ink }}>
+                <div className="flex justify-between items-baseline gap-2">
+                  <span className="pb-ellipsis" style={{ fontWeight: 700, fontSize: 13.5, flex: "1 1 auto" }}>
+                    {x.name || tr("未命名", "Untitled")} <span style={{ color: C.ink2, fontWeight: 500 }}>{kindLabel[x.kind] || ""}</span>
+                  </span>
+                  <span className="pb-shrink0">
+                    {n(x.amount) > 0 || x.cycle !== "one-off"
+                      ? <Num value={`${ccySign(x.ccy)}${money(x.amount, n(x.amount) % 1 ? 2 : 0)}`} size={13.5} weight={800} />
+                      : null}
+                    {x.cycle !== "one-off" && n(x.amount) > 0 && <span style={{ fontSize: 11, color: C.ink2 }}> {cycleLabel[x.cycle]}</span>}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center gap-2 mt-1">
+                  <span className="pb-ellipsis" style={{ fontSize: 11.5, color: C.ink2, fontFamily: MONO, flex: "1 1 auto" }}>
+                    {x.i.notice
+                      ? tr(`${fmtShort(x.i.notice, lang)} 前通知 · ${fmtDate(x.i.end, lang)} 完約`, `notice by ${fmtShort(x.i.notice, lang)} · ends ${fmtDate(x.i.end, lang)}`)
+                      : x.i.end ? tr(`${fmtDate(x.i.end, lang)} 到期`, `ends ${fmtDate(x.i.end, lang)}`)
+                        : x.ccy !== "HKD" && n(x.amount) ? `≈ HK$${money(x.i.monthlyHKD, 2)}${tr(" 每月", " a month")}` : tr("沒有完結日期", "no end date")}
+                  </span>
+                  <span className="pb-shrink0">{statusChip(x)}</span>
+                </div>
+                {showAction && (
+                  <div style={{ marginTop: 8, padding: "7px 9px", background: x.i.status === "late" ? C.redSoft : C.goldSoft, borderRadius: 2, fontSize: 12, lineHeight: 1.5, whiteSpace: "pre-line" }}>
+                    <b style={{ color: x.i.status === "late" ? C.red : C.gold }}>{tr("要做：", "To do: ")}</b>{x.action}
+                  </div>
+                )}
+              </button>
+
+              {isOpen && (
+                <div className="px-3 pb-3">
+                  <div className="grid grid-cols-2 gap-2">
+                    <Lbl t={tr("名稱", "Name")}><TextIn value={x.name} onChange={(v) => up((s) => { s.subs[i].name = v; })} /></Lbl>
+                    <Lbl t={tr("類別", "Type")}>
+                      <select className="pb-in" style={{ width: "100%" }} value={x.kind || "subscription"} onChange={(e) => up((s) => { s.subs[i].kind = e.target.value; })}>
+                        {SUB_KINDS.map((k) => <option key={k} value={k}>{kindLabel[k]}</option>)}
+                      </select>
+                    </Lbl>
+                    <Lbl t={`${tr("費用", "Cost")} ${x.ccy || "HKD"}`}>
+                      <div className="flex gap-1">
+                        <TextIn type="number" step="0.01" right value={x.amount} onChange={(v) => up((s) => { s.subs[i].amount = v; })} />
+                        <CcySelect w={84} value={x.ccy} onChange={(v) => up((s) => { s.subs[i].ccy = v; })} />
+                      </div>
+                    </Lbl>
+                    <Lbl t={tr("收費週期", "Billed")}>
+                      <select className="pb-in" style={{ width: "100%" }} value={x.cycle || "monthly"} onChange={(e) => up((s) => { s.subs[i].cycle = e.target.value; })}>
+                        {SUB_CYCLES.map((k) => <option key={k} value={k}>{cycleLabel[k]}</option>)}
+                      </select>
+                    </Lbl>
+                    <Lbl t={tr("開始日期", "Started")}><TextIn type="date" value={x.start || ""} onChange={(v) => up((s) => { s.subs[i].start = v; })} /></Lbl>
+                    <Lbl t={tr("合約期（月）", "Term (months)")}><TextIn type="number" right value={x.termMonths} onChange={(v) => up((s) => { s.subs[i].termMonths = v; })} /></Lbl>
+                    <Lbl t={tr("完結日期（可直接填）", "Ends on (or set directly)")}><TextIn type="date" value={x.end || ""} onChange={(v) => up((s) => { s.subs[i].end = v; })} /></Lbl>
+                    <Lbl t={tr("提前通知（月）", "Notice (months)")}><TextIn type="number" right value={x.noticeMonths} onChange={(v) => up((s) => { s.subs[i].noticeMonths = v; })} /></Lbl>
+                    <Lbl t={tr("提前幾日提醒", "Remind me (days before)")}><TextIn type="number" right value={x.remindDays} onChange={(v) => up((s) => { s.subs[i].remindDays = v; })} /></Lbl>
+                  </div>
+                  {x.i.actBy && (
+                    <div className="mt-2" style={{ fontSize: 12, color: C.ink2, lineHeight: 1.5 }}>
+                      {x.i.notice
+                        ? tr(`合約 ${fmtDate(x.i.end, lang)} 完結，最遲 ${fmtDate(x.i.notice, lang)} 要通知／退還；${fmtDate(x.i.remindFrom, lang)} 開始提醒。`,
+                          `Ends ${fmtDate(x.i.end, lang)}; give notice by ${fmtDate(x.i.notice, lang)}. Reminders start ${fmtDate(x.i.remindFrom, lang)}.`)
+                        : tr(`${fmtDate(x.i.end, lang)} 到期；${fmtDate(x.i.remindFrom, lang)} 開始提醒。`,
+                          `Ends ${fmtDate(x.i.end, lang)}. Reminders start ${fmtDate(x.i.remindFrom, lang)}.`)}
+                    </div>
+                  )}
+                  <div className="mt-2">
+                    <Lbl t={tr("到時要做甚麼", "What to do when it's time")}>
+                      <textarea className="pb-in" rows={5} style={{ width: "100%", fontSize: 12, resize: "vertical", fontFamily: "inherit" }}
+                        value={x.action || ""} onChange={(e) => up((s) => { s.subs[i].action = e.target.value; })} />
+                    </Lbl>
+                  </div>
+                  <input className="pb-in mt-2" style={{ width: "100%", fontSize: 12 }} placeholder={tr("備註", "Note")} value={x.note || ""} onChange={(e) => up((s) => { s.subs[i].note = e.target.value; })} />
+                  <div className="flex gap-2 mt-3 flex-wrap">
+                    <Btn size="sm" tone="danger" onClick={() => up((s) => { s.subs[i].closed = true; })}>{tr("已取消／完結", "Cancelled / done")}</Btn>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {d.subs.filter((x) => x.i.status !== "ended").length === 0 && <div className="p-5 text-center" style={{ fontSize: 13, color: C.ink2 }}>{tr("還沒有訂閱。", "No subscriptions yet.")}</div>}
+      </Card>
+
+      <div className="flex gap-2"><Btn onClick={add}>{tr("+ 新增訂閱", "+ Add a subscription")}</Btn></div>
+
+      {ended.length > 0 && (
+        <Card accent={C.rule}>
+          <Eyebrow>{tr("已取消或完結", "Cancelled or ended")}</Eyebrow>
+          {ended.map((x) => {
+            const i = idx(x.id);
+            return (
+              <div key={x.id} className="flex justify-between items-center mt-2 gap-2" style={{ fontSize: 13 }}>
+                <span className="pb-ellipsis" style={{ flex: "1 1 auto" }}>{x.name || tr("未命名", "Untitled")}</span>
+                <div className="flex gap-2 pb-shrink0">
+                  {x.closed && <Btn size="sm" onClick={() => up((s) => { s.subs[i].closed = false; })}>{tr("恢復", "Reopen")}</Btn>}
+                  <Btn size="sm" tone="danger" onClick={() => up((s) => { s.subs.splice(i, 1); })}>{tr("刪除", "Delete")}</Btn>
+                </div>
+              </div>
+            );
+          })}
+        </Card>
+      )}
+
+      <div style={{ fontSize: 11.5, color: C.ink2, lineHeight: 1.5 }}>
+        {tr("有提前通知期的合約，提醒按通知期限計算，不是完約日。人民幣及美元收費按「定存」頁設定的匯率折算成港元。",
+          "For contracts with a notice period, reminders count down to the notice deadline, not the end date. CNY and USD charges convert to HKD at the rates set on the Deposits tab.")}
+      </div>
     </div>
   );
 }
