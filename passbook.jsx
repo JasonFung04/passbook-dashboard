@@ -513,10 +513,85 @@ const fxMidOn = (fx, date, ccy) => {
 };
 
 /* ════════════════════════════════════════════════════════════ */
+/* ── QUICK ENTRY: log one spend in a few taps ────────────────── */
+function QuickEntry({ st, up, lang, onClose, onSaved }) {
+  const tr = (zh, en) => (lang === "zh" ? zh : en);
+  const [amount, setAmount] = useState("");
+  const [ccy, setCcy] = useState("HKD");
+  const [cat, setCat] = useState("");
+  const [item, setItem] = useState("");
+  const [date, setDate] = useState(todayISO());
+  const [err, setErr] = useState("");
+  const chip = (sel, tone) => ({
+    border: "none", borderRadius: 999, padding: "8px 13px", fontSize: 14, fontWeight: 700, cursor: "pointer", minHeight: 38,
+    background: sel ? (tone || C.jade) : C.chip, color: sel ? C.onJade : C.ink,
+  });
+  const save = () => {
+    if (!n(amount)) { setErr(tr("請輸入金額", "Enter an amount")); return; }
+    if (!cat) { setErr(tr("揀一個分類", "Pick a category")); return; }
+    let name; let tag = {}; let note = "";
+    if (cat === "sudden") {
+      name = item.trim() || tr("突然購買", "Sudden purchase");
+      tag = { oneOff: true };
+    } else if (cat.startsWith("p:")) {
+      const p = st.plans.find((x) => x.id === cat.slice(2));
+      if (!p) { setErr(tr("找不到這個計劃", "That plan is gone")); return; }
+      name = p.name || tr("計劃", "Plan"); tag = { planId: p.id }; note = item.trim();
+    } else {
+      const b = st.budget.find((x) => x.id === cat.slice(2));
+      if (!b) { setErr(tr("找不到這個分類", "That category is gone")); return; }
+      name = b.name; note = item.trim();
+    }
+    const amt = n(amount);
+    up((s) => { s.tx.push({ id: uid(), date, name, kind: "expense", amount: amt, ccy, note, ...tag }); });
+    onSaved(tr(`已記錄 ${ccySign(ccy)}${money(amt)} · ${name}`, `Logged ${ccySign(ccy)}${money(amt)} · ${name}`));
+    onClose();
+  };
+  return (
+    <>
+      <div className="pb-sheet-bg" onClick={onClose} />
+      <div className="pb-sheet" role="dialog" aria-modal="true" aria-label={tr("記一筆", "Quick entry")} style={{ maxHeight: "86vh", overflowY: "auto" }}>
+        <div style={{ width: 40, height: 5, borderRadius: 3, background: C.rule, margin: "0 auto 12px" }} />
+        <div className="flex justify-between items-center">
+          <Eyebrow>{tr("記一筆", "Quick entry")}</Eyebrow>
+          <button onClick={onClose} className="pb-tab" aria-label={tr("關閉", "Close")} style={{ background: C.chip, border: "none", borderRadius: 999, width: 32, height: 32, fontSize: 16, color: C.ink2, cursor: "pointer" }}>×</button>
+        </div>
+        <div className="flex gap-2 items-center mt-2">
+          <input className="pb-in" type="number" inputMode="decimal" autoFocus placeholder="0" value={amount}
+            onChange={(e) => { setAmount(e.target.value); setErr(""); }}
+            style={{ flex: 1, fontSize: 36, fontWeight: 800, fontFamily: MONO, padding: "8px 12px", textAlign: "right", minWidth: 0 }} />
+          <CcySelect value={ccy} onChange={setCcy} />
+        </div>
+        <div className="mt-3" style={{ fontSize: 12.5, color: C.ink2 }}>{tr("分類", "Category")}</div>
+        <div className="flex flex-wrap gap-2 mt-1">
+          <button className="pb-tab" onClick={() => { setCat("sudden"); setErr(""); }} style={chip(cat === "sudden", C.gold)}>{tr("突然購買", "Sudden")}</button>
+          {st.plans.map((p) => (
+            <button key={p.id} className="pb-tab" onClick={() => { setCat("p:" + p.id); setErr(""); }} style={chip(cat === "p:" + p.id, C.jade)}>{tr("計劃 ", "Plan ")}{p.name || tr("未命名", "Untitled")}</button>
+          ))}
+          {st.budget.map((b) => (
+            <button key={b.id} className="pb-tab" onClick={() => { setCat("b:" + b.id); setErr(""); }} style={chip(cat === "b:" + b.id)}>{b.name || tr("未命名", "Untitled")}</button>
+          ))}
+        </div>
+        {st.budget.length === 0 && st.plans.length === 0 && (
+          <div style={{ fontSize: 12, color: C.ink2, marginTop: 6 }}>{tr("還沒有分類。可以先用「突然購買」，或到計劃頁加分類。", "No categories yet. Use Sudden for now, or add categories on the Plan tab.")}</div>
+        )}
+        <input className="pb-in mt-3" style={{ width: "100%" }} placeholder={tr("買咗咩？（例如 Philips 牙刷 ×4）", "What was it? (e.g. Philips toothbrush x4)")} value={item} onChange={(e) => setItem(e.target.value)} />
+        <div className="flex gap-2 mt-2 items-center">
+          <TextIn type="date" value={date} onChange={setDate} />
+          <button className="pb-tab" onClick={() => setDate(todayISO())} style={chip(date === todayISO())}>{tr("今天", "Today")}</button>
+        </div>
+        {err && <div role="alert" style={{ fontSize: 13, color: C.red, marginTop: 8 }}>{err}</div>}
+        <div className="mt-4"><Btn tone="solid" onClick={save}>{tr("記錄", "Save")}</Btn></div>
+      </div>
+    </>
+  );
+}
+
 export default function Passbook({ lang = "zh", onSignOut, onLang }) {
   const [st, setSt] = useState(null);
   const [tab, setTab] = useState("overview");
   const [moreOpen, setMoreOpen] = useState(false);
+  const [quickOpen, setQuickOpen] = useState(false);
   const [, setThemeTick] = useState(0);
   // Follow the phone's light/dark setting live.
   useEffect(() => {
@@ -655,6 +730,8 @@ export default function Passbook({ lang = "zh", onSignOut, onLang }) {
         .pb-navbtn{flex:1;display:flex;flex-direction:column;align-items:center;gap:1px;background:none;border:none;padding:6px 0 5px;font-size:11px;font-weight:700;cursor:pointer;min-height:50px;border-radius:24px}
         .pb-sheet-bg{position:fixed;inset:0;z-index:30;background:${C.scrim};animation:pbFade .2s ease}
         .pb-sheet{position:fixed;left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom));z-index:31;background:${C.paper};border-radius:30px;padding:10px 12px 14px;max-width:560px;margin:0 auto;box-shadow:${C.shadow};animation:pbUp .28s cubic-bezier(.2,.9,.3,1.15)}
+        .pb-fab{position:fixed;right:18px;bottom:calc(92px + env(safe-area-inset-bottom));z-index:22;width:58px;height:58px;border-radius:50%;border:none;background:${C.jade};color:${C.onJade};font-size:32px;font-weight:600;line-height:1;cursor:pointer;box-shadow:${C.shadow};display:grid;place-items:center;transition:transform .12s ease}
+        .pb-fab:active{transform:scale(.92)}
         .pb-toast{position:fixed;top:calc(10px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:40;background:${C.ink};color:${C.paper};font-size:13px;font-weight:700;padding:7px 14px;border-radius:999px;box-shadow:${C.shadow};animation:pbDrop .25s ease}
         .pb-pop{animation:pbPop .35s cubic-bezier(.2,.9,.3,1.2)}
         @keyframes pbUp{from{transform:translateY(40px);opacity:0}to{transform:none;opacity:1}}
@@ -706,6 +783,14 @@ export default function Passbook({ lang = "zh", onSignOut, onLang }) {
           </button>
         </div>
       </nav>
+
+      {!quickOpen && !moreOpen && (
+        <button className="pb-fab" onClick={() => setQuickOpen(true)} aria-label={tr("記一筆", "Quick entry")}>+</button>
+      )}
+      {quickOpen && (
+        <QuickEntry st={st} up={up} lang={lang} onClose={() => setQuickOpen(false)}
+          onSaved={(msg) => { setFlash(msg); setTimeout(() => setFlash(""), 1600); }} />
+      )}
 
       {moreOpen && (
         <>
