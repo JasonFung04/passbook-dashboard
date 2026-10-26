@@ -69,6 +69,20 @@ const daysBetween = (a, b) => {
 const fmtDate = (d, lang = "zh") => { const dt = validDate(d); return dt ? dt.toLocaleDateString(lang === "zh" ? "zh-Hant" : "en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—"; };
 const fmtShort = (d, lang = "zh") => { const dt = validDate(d); return dt ? dt.toLocaleDateString(lang === "zh" ? "zh-Hant" : "en-GB", { day: "2-digit", month: "short" }) : "—"; };
 const monthKey = (d) => String(d).slice(0, 7);
+// Planned spends: months from this month up to and including the target month.
+const planMonthsLeft = (date) => {
+  if (!date) return 1;
+  const [ty, tm] = String(date).split("-").map(Number);
+  const now = new Date();
+  return Math.max(1, (ty * 12 + tm) - (now.getFullYear() * 12 + now.getMonth() + 1) + 1);
+};
+const planInfo = (p, rates, txs) => {
+  const target = toHKD(p.amount, p.ccy || "HKD", rates);
+  const spent = txs.filter((t) => t.planId === p.id && t.kind === "expense").reduce((a, t) => a + toHKD(t.amount, t.ccy || "HKD", rates), 0);
+  const remaining = Math.max(0, target - spent);
+  const monthsLeft = planMonthsLeft(p.date);
+  return { target, spent, remaining, monthsLeft, perMonth: remaining / monthsLeft, pct: target ? Math.min(100, (spent / target) * 100) : 0 };
+};
 const monthLabel = (k, lang = "zh") => new Date(k + "-01").toLocaleDateString(lang === "zh" ? "zh-Hant" : "en-GB", { month: "short", year: "numeric" });
 const CCYS = ["HKD", "USD", "CNY"];
 const toHKD = (amt, ccy, rates) => n(amt) * (ccy === "HKD" ? 1 : n(rates?.[ccy]) || 1);
@@ -95,6 +109,7 @@ const SEED = {
   budget: [],
   tx: [],
   deposits: [],
+  plans: [],
   goals: [],
 };
 
@@ -119,6 +134,7 @@ function migrate(s) {
   if (!s.settings.otRate) s.settings.otRate = 45;
   if (!s.leave) s.leave = { perYear: 12, anchorDate: todayISO(), anchorBalance: 12, days: [] };
   if (!s.events) s.events = [];
+  if (!s.plans) s.plans = [];
   if (!s.health) s.health = { heightCm: 0, goalBmi: 24, start: null, milestone: null, kcal: 0, protein: 0, weeklyMin: 250, plan: { swim: 2, strength: 2, cardio: 1 }, unit: "kg", weights: [], activities: [] };
   s.tx = (s.tx || []).map((t) => ({ ccy: "HKD", ...t }));
   s.income = (s.income || []).map((r) => ({ ccy: "HKD", ...r }));
@@ -538,7 +554,8 @@ export default function Passbook({ lang = "zh", onSignOut, onLang }) {
     const rates = st.settings.rates || { USD: 7.8, CNY: 1.09 };
     const pay = payInfo(st, rates, n(st.settings.otPlanHours));
     const income = pay.net;   // take-home after the employee's 5% MPF, incl. the expected OT hours
-    const plannedExp = st.budget.filter((b) => b.group !== "Savings").reduce((a, b) => a + toHKD(b.amount, b.ccy || "HKD", rates), 0);
+    const suddenMonthly = n(st.settings.suddenMonthly);
+    const plannedExp = st.budget.filter((b) => b.group !== "Savings").reduce((a, b) => a + toHKD(b.amount, b.ccy || "HKD", rates), 0) + suddenMonthly;
     const plannedSave = st.budget.filter((b) => b.group === "Savings").reduce((a, b) => a + toHKD(b.amount, b.ccy || "HKD", rates), 0);
     const essentials = st.budget.filter((b) => b.group === "Living").reduce((a, b) => a + toHKD(b.amount, b.ccy || "HKD", rates), 0);
     const months = [...new Set(st.tx.map((t) => monthKey(t.date)))].sort().reverse();
@@ -575,6 +592,8 @@ export default function Passbook({ lang = "zh", onSignOut, onLang }) {
     const emergencyHKD = eGoal ? n(eGoal.current) : depHKD;
     const cover = plannedExp ? emergencyHKD / plannedExp : 0;
 
+    const plansInfo = (st.plans || []).map((p) => ({ ...p, i: planInfo(p, rates, st.tx) }));
+    const plansMonthly = plansInfo.reduce((a, p) => a + p.i.perMonth, 0);
     const subs = (st.subs || []).filter((x) => !x.closed).map((x) => ({ ...x, i: subInfo(x, rates) }))
       .sort((a, b) => (Number.isNaN(a.i.left) ? 1e9 : a.i.left) - (Number.isNaN(b.i.left) ? 1e9 : b.i.left));
     const subsMonthly = subs.filter((x) => x.i.status !== "ended").reduce((a, x) => a + x.i.monthlyHKD, 0);
@@ -582,7 +601,7 @@ export default function Passbook({ lang = "zh", onSignOut, onLang }) {
     const dueSubs = subs.filter((x) => x.i.status === "due" || x.i.status === "late");
 
     return {
-      income, plannedExp, plannedSave, essentials, surplus: income - plannedExp - plannedSave,
+      income, plannedExp, plannedSave, essentials, suddenMonthly, plansInfo, plansMonthly, surplus: income - plannedExp - plannedSave - plansMonthly,
       months, goalTarget, goalNow, live, depHKD, usdHKD, cnyHKD, blended, idle, nextManual, due30,
       perBank, banks, avgSave, netWorth, emergencyTarget, cover, rates, cashHKD, debtHKD,
       subs, subsMonthly, dueDeps, dueSubs, inv, investedHKD,
@@ -1385,7 +1404,7 @@ function Month({ st, d, up, lang }) {
   const rates = st.settings.rates;
   const cur = monthKey(todayISO());
   const [m, setM] = useState(d.months.includes(cur) ? cur : d.months[0] || cur);
-  const [f, setF] = useState({ date: todayISO(), name: "", kind: "expense", amount: 0, ccy: "HKD", note: "" });
+  const [f, setF] = useState({ date: todayISO(), name: "", kind: "expense", amount: 0, ccy: "HKD", note: "", link: "" });
 
   const rows = st.tx.map((t, i) => ({ t, i })).filter((x) => monthKey(x.t.date) === m).sort((a, b) => a.t.date.localeCompare(b.t.date));
   const extraIn = rows.filter((x) => x.t.kind === "income").reduce((a, x) => a + toHKD(x.t.amount, x.t.ccy || "HKD", rates), 0);
@@ -1402,12 +1421,19 @@ function Month({ st, d, up, lang }) {
   const net = inflow - actExp - actSav;
 
   const byName = {};
-  rows.forEach((x) => { if (x.t.kind !== "income") { const k = x.t.name.trim().toLowerCase(); byName[k] = (byName[k] || 0) + toHKD(x.t.amount, x.t.ccy || "HKD", rates); } });
+  const shownName = {};
+  rows.forEach((x) => { if (x.t.kind !== "income" && !x.t.oneOff && !x.t.planId) { const k = x.t.name.trim().toLowerCase(); shownName[k] = x.t.name.trim(); byName[k] = (byName[k] || 0) + toHKD(x.t.amount, x.t.ccy || "HKD", rates); } });
   const pnl = st.budget.map((b) => {
     const k = b.name.trim().toLowerCase(); const a = byName[k] || 0; delete byName[k];
     return { name: b.name, group: b.group, budget: toHKD(b.amount, b.ccy || "HKD", rates), actual: a, diff: toHKD(b.amount, b.ccy || "HKD", rates) - a };
   });
-  Object.entries(byName).forEach(([k, v]) => pnl.push({ name: k, group: "Unplanned", budget: 0, actual: v, diff: -v }));
+  const suddenAct = rows.filter((x) => x.t.oneOff).reduce((a, x) => a + toHKD(x.t.amount, x.t.ccy || "HKD", rates), 0);
+  pnl.push({ name: tr("突然購買", "Sudden purchases"), group: "Sudden", budget: d.suddenMonthly, actual: suddenAct, diff: d.suddenMonthly - suddenAct, key: "sudden" });
+  d.plansInfo.forEach((p) => {
+    const act = rows.filter((x) => x.t.planId === p.id).reduce((a, x) => a + toHKD(x.t.amount, x.t.ccy || "HKD", rates), 0);
+    if (act || p.i.perMonth) pnl.push({ name: p.name || tr("未命名計劃", "Untitled plan"), group: "Planned", budget: act + p.i.perMonth, actual: act, diff: p.i.perMonth, key: p.id });
+  });
+  Object.entries(byName).forEach(([k, v]) => pnl.push({ name: shownName[k] || k, group: "Unplanned", budget: 0, actual: v, diff: -v }));
 
   const gapToEmergency = Math.max(0, d.emergencyTarget - d.emergencyHKD);
   const keep = Math.max(0, net);
@@ -1415,10 +1441,14 @@ function Month({ st, d, up, lang }) {
   const toInvest = keep - toCushion;
 
   const add = () => {
-    if (!f.name.trim() || !n(f.amount)) return;
-    up((s) => { s.tx.push({ ...f, id: uid(), amount: n(f.amount) }); });
+    const plan = st.plans.find((p) => p.id === f.link);
+    const name = f.name.trim() || (plan ? plan.name : "");
+    if (!name || !n(f.amount)) return;
+    const { link, ...rest } = f;
+    const tag = f.kind === "expense" && link === "sudden" ? { oneOff: true } : f.kind === "expense" && plan ? { planId: plan.id } : {};
+    up((s) => { s.tx.push({ ...rest, name, id: uid(), amount: n(f.amount), ...tag }); });
     setM(monthKey(f.date));
-    setF({ date: f.date, name: "", kind: "expense", amount: 0, ccy: f.ccy, note: "" });
+    setF({ date: f.date, name: "", kind: "expense", amount: 0, ccy: f.ccy, note: "", link: "" });
   };
   const monthList = [...new Set([cur, ...d.months])].sort().reverse();
 
@@ -1483,6 +1513,13 @@ function Month({ st, d, up, lang }) {
         </div>
         <input className="pb-in mt-2" style={{ width: "100%" }} list="cats" placeholder={L("Category")} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
         <datalist id="cats">{st.budget.map((b) => <option key={b.id} value={b.name} />)}</datalist>
+        {f.kind === "expense" && (
+          <select className="pb-in mt-2" style={{ width: "100%" }} value={f.link} onChange={(e) => setF({ ...f, link: e.target.value })}>
+            <option value="">{tr("計入預算分類", "Counts against a budget line")}</option>
+            <option value="sudden">{tr("突然購買（不在預算內）", "Sudden purchase (not budgeted)")}</option>
+            {st.plans.map((p) => <option key={p.id} value={p.id}>{tr("計劃：", "Plan: ")}{p.name || tr("未命名", "Untitled")}</option>)}
+          </select>
+        )}
         <div className="flex gap-2 mt-2">
           <TextIn type="number" right placeholder="0" value={f.amount} onChange={(v) => setF({ ...f, amount: v })} />
           <CcySelect value={f.ccy} onChange={(v) => setF({ ...f, ccy: v })} />
@@ -1518,6 +1555,8 @@ function Month({ st, d, up, lang }) {
                       {tx.name}
                       {tx.kind === "saving" && <span className="ml-2"><Chip tone="gold">{L("set aside")}</Chip></span>}
                       {tx.kind === "income" && <span className="ml-2"><Chip tone="jade">{L("in")}</Chip></span>}
+                      {tx.oneOff && <span className="ml-2"><Chip tone="gold">{tr("突然", "sudden")}</Chip></span>}
+                      {tx.planId && <span className="ml-2"><Chip tone="jade">{tr("計劃", "plan")}</Chip></span>}
                       {tx.note && <div style={{ fontSize: 11, color: C.ink2 }}>{tx.note}</div>}
                     </td>
                     <td style={{ padding: "8px 10px", textAlign: "right" }}><Num value={`${ccySign(tx.ccy || "HKD")}${money(tx.amount)}`} color={tx.kind === "income" ? C.jade : tx.kind === "saving" ? C.gold : C.ink} /></td>
@@ -1544,11 +1583,13 @@ function Month({ st, d, up, lang }) {
             </tr></thead>
             <tbody>
               {pnl.map((r) => (
-                <tr key={r.name} className="pb-row">
+                <tr key={r.key || r.name} className="pb-row">
                   <td style={{ padding: "7px 10px" }}>
                     {r.name}
                     {r.group === "Savings" && <span className="ml-2"><Chip tone="gold">{L("save")}</Chip></span>}
                     {r.group === "Unplanned" && <span className="ml-2"><Chip tone="red">{L("unplanned")}</Chip></span>}
+                    {r.group === "Sudden" && <span className="ml-2"><Chip tone="gold">{tr("突然", "sudden")}</Chip></span>}
+                    {r.group === "Planned" && <span className="ml-2"><Chip tone="jade">{tr("計劃", "plan")}</Chip></span>}
                   </td>
                   <td style={{ padding: "7px 10px", textAlign: "right" }}><Num value={money(r.budget)} weight={500} color={C.ink2} /></td>
                   <td style={{ padding: "7px 10px", textAlign: "right" }}><Num value={money(r.actual)} /></td>
@@ -1571,6 +1612,7 @@ function Month({ st, d, up, lang }) {
 /* ── PLAN ────────────────────────────────────────────────────── */
 function Plan({ st, d, up, lang }) {
   const L = (key) => t(lang, key);
+  const tr = (zh, en) => (lang === "zh" ? zh : en);
   const rates = st.settings.rates;
   const groups = [
     ["Living", L("Living")],
@@ -1611,6 +1653,43 @@ function Plan({ st, d, up, lang }) {
         <div style={{ fontSize: 12, color: C.ink2, marginTop: 6 }}>{lang === "zh" ? "每月實際時數在「月度」輸入；未輸入時用預計數字。" : "Log actual hours on Month; until you do, the expected figure is used."}</div>
       </Card>
 
+      <Card accent={C.gold}>
+        <Eyebrow color={C.gold}>{tr("突然購買與計劃支出", "Sudden & planned spending")}</Eyebrow>
+        <div className="mt-2" style={{ fontSize: 12.5, color: C.ink2 }}>
+          {tr("突然買的嘢（牙刷、臨時車票）每月預留一個數目。大項目（旅行、約會、蜜月）設定日期，之後每月自動預留。", "Unplanned buys (a toothbrush, a last-minute ticket) get a monthly allowance. Big items (a trip, a date, a honeymoon) get a date, and Passbook works out what to set aside each month.")}
+        </div>
+        <div className="mt-3"><Lbl t={tr("突然購買每月預留 HK$", "Sudden purchases a month, HK$")}><TextIn type="number" right value={st.settings.suddenMonthly ?? 0} onChange={(v) => up((s) => { s.settings.suddenMonthly = v; })} /></Lbl></div>
+        <div className="mt-3 space-y-2">
+          {d.plansInfo.map((p) => {
+            const i = p.i; const idx = st.plans.findIndex((x) => x.id === p.id);
+            return (
+              <div key={p.id} className="pb-row" style={{ paddingBottom: 10 }}>
+                <div className="grid gap-2" style={{ gridTemplateColumns: "1fr 1fr" }}>
+                  <TextIn value={p.name} onChange={(v) => up((s) => { s.plans[idx].name = v; })} placeholder={tr("例如：馬爾代夫蜜月", "e.g. Maldives honeymoon")} />
+                  <TextIn type="date" value={p.date || ""} onChange={(v) => up((s) => { s.plans[idx].date = v; })} />
+                </div>
+                <div className="flex gap-2 mt-2 items-center">
+                  <TextIn type="number" right value={p.amount} onChange={(v) => up((s) => { s.plans[idx].amount = v; })} />
+                  <CcySelect value={p.ccy || "HKD"} onChange={(v) => up((s) => { s.plans[idx].ccy = v; })} />
+                  <RemoveBtn onClick={() => up((s) => { s.plans.splice(idx, 1); })} label={L("Delete")} />
+                </div>
+                {i.target > 0 && (
+                  <>
+                    <div style={{ fontSize: 12, color: C.ink2, marginTop: 6 }}>
+                      {tr(`已花 HK$${money(i.spent)}，目標 HK$${money(i.target)}`, `Spent HK$${money(i.spent)} of HK$${money(i.target)}`)}
+                      {i.remaining > 0 ? tr(`，每月預留 HK$${money(i.perMonth)}（${i.monthsLeft} 個月）`, `, set aside HK$${money(i.perMonth)} a month for ${i.monthsLeft} month${i.monthsLeft === 1 ? "" : "s"}`) : tr("，已齊備", ", fully covered")}
+                    </div>
+                    <div className="mt-1"><Bar2 pct={i.pct} color={i.remaining > 0 ? C.gold : C.jade} h={5} /></div>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div className="mt-2"><Btn size="sm" onClick={() => up((s) => { s.plans.push({ id: uid(), name: "", amount: 0, ccy: "HKD", date: "", note: "" }); })}>{tr("+ 新增計劃支出", "+ Add a planned spend")}</Btn></div>
+        <div style={{ fontSize: 13, marginTop: 10 }}>{tr("計劃每月需預留 ", "Plans need ")}<Num value={hk(d.plansMonthly)} weight={800} />{tr(" / 月", " a month")}</div>
+      </Card>
+
       {groups.map(([g, label]) => {
         const rows = st.budget.map((b, i) => ({ b, i })).filter((x) => x.b.group === g);
         const sum = rows.reduce((a, x) => a + toHKD(x.b.amount, x.b.ccy || "HKD", rates), 0);
@@ -1644,7 +1723,7 @@ function Plan({ st, d, up, lang }) {
         <Eyebrow>{L("Does the plan balance?")}</Eyebrow>
         <table style={{ width: "100%", marginTop: 6 }}>
           <tbody style={{ fontSize: 13.5 }}>
-            {[[lang === "zh" ? "實收（含預計加班，已扣強積金）" : "Take-home (incl. expected OT, after MPF)", d.income, C.jade], [L("Spending"), -d.plannedExp, C.ink], [L("Set aside"), -d.plannedSave, C.gold]].map(([l, v, c]) => (
+            {[[lang === "zh" ? "實收（含預計加班，已扣強積金）" : "Take-home (incl. expected OT, after MPF)", d.income, C.jade], [L("Spending"), -d.plannedExp, C.ink], [L("Set aside"), -d.plannedSave, C.gold], [tr("計劃支出預留", "Planned spends"), -d.plansMonthly, C.gold]].map(([l, v, c]) => (
               <tr key={l} className="pb-row"><td style={{ padding: "6px 0", color: C.ink2 }}>{l}</td>
                 <td style={{ textAlign: "right" }}><Num value={hk(v)} color={c} /></td></tr>
             ))}
