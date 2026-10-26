@@ -129,6 +129,7 @@ function migrate(s) {
   if (!s.settings.otRate) s.settings.otRate = 45;
   if (!s.leave) s.leave = { perYear: 12, anchorDate: todayISO(), anchorBalance: 12, days: [] };
   if (!s.events) s.events = [];
+  if (!s.health) s.health = { heightCm: 0, goalBmi: 24, start: null, milestone: null, kcal: 0, protein: 0, weeklyMin: 250, plan: { swim: 2, strength: 2, cardio: 1 }, unit: "kg", weights: [], activities: [] };
   s.tx = (s.tx || []).map((t) => ({ ccy: "HKD", ...t }));
   s.income = (s.income || []).map((r) => ({ ccy: "HKD", ...r }));
   s.budget = (s.budget || []).map((r) => ({ ccy: "HKD", ...r }));
@@ -349,6 +350,49 @@ function payInfo(st, rates, otHours = 0) {
   return { gross, relevant, ot, otRate, mpf, net: gross + ot - mpf };
 }
 
+/* ── health: weight, BMI, workouts ───────────────────────────── */
+const LB = 2.20462;
+// Hong Kong Department of Health / WHO Asian cut-offs.
+const bmiBand = (b) => (b < 18.5 ? ["過輕", "Underweight", "gold"] : b < 23 ? ["正常", "Healthy", "jade"] : b < 25 ? ["過重", "Overweight", "gold"] : ["肥胖", "Obese", "red"]);
+// MET values (Compendium of Physical Activities, rounded) by intensity: light / moderate / vigorous.
+const SPORTS = {
+  swim: ["游水", "Swim", [4.8, 6, 9.8]], run: ["跑步", "Run", [6, 8.3, 11]], cycle: ["踩單車", "Cycle", [4, 6.8, 10]],
+  gym: ["健身（重量）", "Strength / gym", [3.5, 5, 6]], walk: ["行路", "Walk", [2.8, 3.5, 4.3]], hike: ["行山", "Hike", [5.3, 6, 7.8]],
+  ball: ["球類", "Ball sports", [4.5, 6, 8]], dive: ["潛水", "Diving", [5, 7, 10]], other: ["其他", "Other", [3, 5, 7]],
+};
+const kcalOf = (a, kg) => { const m = (SPORTS[a.type] || SPORTS.other)[2][Math.max(0, Math.min(2, n(a.intensity ?? 1)))]; return m * n(kg) * (n(a.minutes) / 60); };
+const weekStart = (isoStr) => { const dt = new Date(isoStr + "T00:00:00"); dt.setDate(dt.getDate() - ((dt.getDay() + 6) % 7)); return isoLocal(dt); };
+function healthInfo(h) {
+  const weights = [...(h?.weights || [])].filter((w) => w.date && n(w.kg)).sort((a, b) => (a.date < b.date ? -1 : 1));
+  const acts = [...(h?.activities || [])].filter((a) => a.date).sort((a, b) => (a.date + (a.time || "") < b.date + (b.time || "") ? 1 : -1));
+  const m = n(h?.heightCm) / 100;
+  const last = weights[weights.length - 1] || null;
+  const kgNow = last ? n(last.kg) : n(h?.start?.kg);
+  const bmi = m && kgNow ? kgNow / (m * m) : 0;
+  const goalKg = m ? +(n(h?.goalBmi || 24) * m * m).toFixed(1) : 0;
+  const healthyKg = m ? +(22.9 * m * m).toFixed(1) : 0;
+  // 7-day average smooths out day-to-day water swings.
+  const avg7 = (() => { if (!last) return 0; const from = isoLocal(new Date(new Date(last.date + "T00:00:00").getTime() - 6 * DAY)); const xs = weights.filter((w) => w.date >= from); return xs.reduce((a, w) => a + n(w.kg), 0) / xs.length; })();
+  const start = h?.start || (weights[0] ? { date: weights[0].date, kg: weights[0].kg } : null);
+  const ms = h?.milestone || null;
+  let pace = null;
+  if (start && ms && ms.date > start.date) {
+    const total = daysBetween(start.date, ms.date);
+    const done = Math.max(0, Math.min(total, daysBetween(start.date, new Date())));
+    const planNow = n(start.kg) - ((n(start.kg) - n(ms.kg)) * done) / total;
+    const weeksLeft = Math.max(0, daysBetween(new Date(), ms.date)) / 7;
+    const cur = avg7 || kgNow;
+    pace = { planNow, weeksLeft, needPerWeek: weeksLeft > 0 ? (cur - n(ms.kg)) / weeksLeft : 0, ahead: planNow - cur, total };
+  }
+  const wk = weekStart(todayISO());
+  const thisWeek = acts.filter((a) => a.date >= wk);
+  const minutes = thisWeek.reduce((a, x) => a + n(x.minutes), 0);
+  const kcal = thisWeek.reduce((a, x) => a + kcalOf(x, kgNow), 0);
+  const count = (types) => thisWeek.filter((a) => types.includes(a.type)).length;
+  return { weights, acts, last, kgNow, bmi, goalKg, healthyKg, avg7, start, ms, pace, thisWeek, minutes, kcal,
+    sessions: { swim: count(["swim"]), strength: count(["gym"]), cardio: count(["run", "cycle", "hike", "ball", "dive"]) } };
+}
+
 /* ── Hong Kong general holidays (= bank holidays) ────────────── */
 // Source: HKSAR Government gazette, via info.gov.hk (2026) and EDB (2027).
 const HK_HOLIDAYS = {
@@ -541,6 +585,7 @@ export default function Passbook({ lang = "zh", onSignOut, onLang }) {
       bankRates: mkt?.rates || null, fx: fxInfo(mkt?.fx || []),
       mpf: mpfInfo(st.mpf, pay.relevant), pay, emergencyHKD, eGoal,
       leaveNow: leaveInfo(st.leave, new Date().getFullYear()), leaveRaw: st.leave, events: st.events || [],
+      health: healthInfo(st.health),
     };
   }, [st, ibkr, mkt]);
 
@@ -550,6 +595,7 @@ export default function Passbook({ lang = "zh", onSignOut, onLang }) {
   // Four everyday destinations in the tab bar; the rest live under More.
   const MAIN = [["overview", L("Overview"), "home"], ["deposits", L("Deposits"), "bank"], ["invest", L("Invest"), "chart"], ["fx", L("FX"), "swap"]];
   const MORE = [
+    ["health", L("Health"), d.health.last ? tr(`體重及運動紀錄 · ${d.health.last.kg} kg · BMI ${d.health.bmi.toFixed(1)}`, `Weight & workouts · ${d.health.last.kg} kg · BMI ${d.health.bmi.toFixed(1)}`) : tr("體重及運動紀錄", "Weight & workouts")],
     ["leave", L("Leave"), tr(`年假日曆、公眾假期、行程 · 今年剩 ${d.leaveNow.left} 日`, `Leave calendar, holidays, trips · ${d.leaveNow.left} days left`)],
     ["subs", L("Subscriptions"), tr("訂閱、合約及保養到期", "Plans, contracts and warranties")],
     ["goals", L("Goals"), tr("應急錢、婚禮、旅行", "Emergency, wedding, travel")],
@@ -568,7 +614,7 @@ export default function Passbook({ lang = "zh", onSignOut, onLang }) {
         .pb-in{background:#fff;border:1px solid ${C.rule};border-radius:6px;padding:8px 10px;font-size:14px;color:${C.ink};outline:none;min-width:0}
         @media (pointer:coarse){.pb-in{font-size:16px}}
         .pb-in:focus{border-color:${C.jade};box-shadow:0 0 0 3px ${C.jadeSoft}}
-        .pb-btn{border-radius:6px;font-weight:700;cursor:pointer;transition:opacity .15s;min-height:34px}
+        .pb-btn{border-radius:6px;font-weight:700;cursor:pointer;transition:opacity .15s;min-height:34px;white-space:nowrap;flex-shrink:0}
         .pb-btn:hover{opacity:.82}
         .pb-btn:focus-visible,.pb-tab:focus-visible{outline:2px solid ${C.jade};outline-offset:2px}
         .pb-row{border-bottom:1px solid ${C.rule}}
@@ -606,6 +652,7 @@ export default function Passbook({ lang = "zh", onSignOut, onLang }) {
         {tab === "invest" && <Invest st={st} d={d} up={up} lang={lang} />}
         {tab === "fx" && <Fx st={st} d={d} up={up} lang={lang} />}
         {tab === "leave" && <Leave st={st} d={d} up={up} lang={lang} />}
+        {tab === "health" && <Health st={st} d={d} up={up} lang={lang} />}
         {tab === "month" && <Month st={st} d={d} up={up} lang={lang} />}
         {tab === "budget" && <Plan st={st} d={d} up={up} lang={lang} />}
         {tab === "goals" && <Goals st={st} d={d} up={up} lang={lang} />}
@@ -778,6 +825,11 @@ function ComingUp({ d, go, lang }) {
       title: e.title, what: [e.time, e.note].filter(Boolean).join(" · ") || tr("行程", "Plan"),
       extra: (() => { const k = leaveNeeded(d.leaveRaw, e).length; return k ? tr(`需請 ${k} 日假`, `Needs ${k} day${k > 1 ? "s" : ""} of leave`) : null; })(),
     })),
+    ...(d.health.start && (!d.health.last || daysBetween(d.health.last.date, new Date()) >= 7) ? [{
+      id: "weigh-in", tab: "health", date: new Date(), left: 0, late: false,
+      title: tr("量一量體重", "Weigh in"),
+      what: tr("一星期未有記錄體重。早上起床、去完洗手間後量，記錄到「健康」。", "No weight logged for a week. Weigh in the morning after the bathroom, then log it under Health."),
+    }] : []),
     ...(d.leaveNow.left > 0 && daysBetween(new Date(), `${d.leaveNow.year}-12-31`) <= 60 ? [{
       id: "leave-year-end", tab: "leave", date: new Date(`${d.leaveNow.year}-12-31T00:00:00`), left: daysBetween(new Date(), `${d.leaveNow.year}-12-31`), late: false,
       title: tr(`${d.leaveNow.year} 年假還有 ${d.leaveNow.left} 日`, `${d.leaveNow.left} days of ${d.leaveNow.year} leave left`),
@@ -800,7 +852,7 @@ function ComingUp({ d, go, lang }) {
     })()] : []),
   ].sort((a, b) => a.left - b.left);
   if (!rows.length) return null;
-  const tabName = { deposits: tr("定存", "Deposits"), invest: tr("投資", "Invest"), subs: tr("訂閱", "Subscriptions"), leave: tr("假期", "Leave") };
+  const tabName = { deposits: tr("定存", "Deposits"), invest: tr("投資", "Invest"), subs: tr("訂閱", "Subscriptions"), leave: tr("假期", "Leave"), health: tr("健康", "Health") };
   const shown = all ? rows : rows.slice(0, 3);
   return (
     <Card accent={rows.some((r) => r.late) ? C.red : C.gold}>
@@ -2137,6 +2189,221 @@ function Mpf({ st, d, up, lang }) {
           "eMPF needs a password plus an SMS/email code, or iAM Smart, and offers no export or third-party access, so it can't be read automatically. Copying the total from the eMPF app once a quarter is enough; after 90 days without an update, Coming up reminds you. You can also send Claude an eMPF screenshot to fill it in.")}
       </div>
     </Card>
+  );
+}
+
+/* ── HEALTH: weight, workouts and a plain-spoken coach ───────── */
+function Health({ st, d, up, lang }) {
+  const tr = (zh, en) => (lang === "zh" ? zh : en);
+  const h = st.health || {};
+  const v = d.health;
+  const lbMode = h.unit === "lb";
+  const show = (kg, dp = 1) => (lbMode ? `${(n(kg) * LB).toFixed(dp === 1 ? 0 : dp)} lb` : `${n(kg).toFixed(dp)} kg`);
+  const [wf, setWf] = useState({ date: todayISO(), val: "" });
+  const [af, setAf] = useState({ date: todayISO(), time: "", type: "swim", minutes: 60, intensity: 1, km: "", note: "" });
+  const setH = (fn) => up((s) => { s.health ||= {}; fn(s.health); });
+  const band = bmiBand(v.bmi);
+  const today = todayISO();
+
+  const addWeight = () => {
+    const kg = lbMode ? n(wf.val) / LB : n(wf.val);
+    if (!kg) return;
+    setH((x) => { x.weights = [...(x.weights || []).filter((w) => w.date !== wf.date), { id: uid(), date: wf.date, kg: +kg.toFixed(1) }]; });
+    setWf({ ...wf, val: "" });
+  };
+  const addAct = () => {
+    if (!n(af.minutes)) return;
+    setH((x) => { x.activities = [...(x.activities || []), { id: uid(), ...af, minutes: n(af.minutes), km: af.km === "" ? null : n(af.km), intensity: n(af.intensity) }]; });
+    setAf({ ...af, note: "", km: "" });
+  };
+
+  // Chart: logged weights, the straight-line plan to the checkpoint, and the goal.
+  const chart = useMemo(() => {
+    if (!v.start) return [];
+    const days = new Set(v.weights.map((w) => w.date));
+    days.add(v.start.date); if (v.ms) days.add(v.ms.date);
+    return [...days].sort().map((date) => {
+      const w = v.weights.find((x) => x.date === date);
+      let plan = null;
+      if (v.ms && date >= v.start.date && date <= v.ms.date) {
+        const t = daysBetween(v.start.date, date) / Math.max(1, daysBetween(v.start.date, v.ms.date));
+        plan = +(n(v.start.kg) - (n(v.start.kg) - n(v.ms.kg)) * t).toFixed(2);
+      }
+      const k = (x) => (x == null ? null : lbMode ? +(x * LB).toFixed(1) : x);
+      return { date, ts: new Date(date + "T00:00:00").getTime(), kg: k(w ? n(w.kg) : null), plan: k(plan) };
+    });
+  }, [v, lbMode]);
+
+  const target = (have, want) => (
+    <span style={{ fontFamily: MONO, fontWeight: 700, color: have >= want ? C.jade : C.ink }}>{have}/{want}{have >= want ? " ✓" : ""}</span>
+  );
+
+  return (
+    <div className="space-y-4">
+      {!n(h.heightCm) || !v.start ? (
+        <Card accent={C.gold}>
+          <Eyebrow>{tr("先設定身高和起點", "Set your height and starting point")}</Eyebrow>
+          <div className="grid gap-2 mt-2" style={{ gridTemplateColumns: "1fr 1fr" }}>
+            <Lbl t={tr("身高 cm", "Height cm")}><TextIn type="number" right value={h.heightCm} onChange={(x) => setH((s) => { s.heightCm = x; })} /></Lbl>
+            <Lbl t={tr("目標 BMI", "Goal BMI")}><TextIn type="number" step="0.5" right value={h.goalBmi} onChange={(x) => setH((s) => { s.goalBmi = x; })} /></Lbl>
+          </div>
+        </Card>
+      ) : (
+        <Card>
+          <div className="flex justify-between items-start gap-3">
+            <div style={{ minWidth: 0 }}>
+              <Eyebrow>{tr("現在", "Now")}</Eyebrow>
+              <div className="flex items-baseline gap-2 mt-1">
+                <Num value={show(v.kgNow)} size={26} weight={800} />
+                {v.avg7 && v.weights.length > 2 ? <span style={{ fontSize: 12, color: C.ink2 }}>{tr(`7 日平均 ${show(v.avg7)}`, `7-day avg ${show(v.avg7)}`)}</span> : null}
+              </div>
+              <div className="flex items-center gap-2 mt-1">
+                <span style={{ fontSize: 13, color: C.ink2 }}>BMI {v.bmi.toFixed(1)}</span>
+                <Chip tone={band[2]}>{tr(band[0], band[1])}</Chip>
+              </div>
+            </div>
+            <div className="text-right pb-shrink0">
+              <Eyebrow>{tr(`目標 BMI ${n(h.goalBmi)}`, `Goal BMI ${n(h.goalBmi)}`)}</Eyebrow>
+              <div className="mt-1"><Num value={show(v.goalKg)} size={18} weight={800} color={C.jade} /></div>
+              <div style={{ fontSize: 12, color: C.ink2 }}>{tr(`還差 ${show(Math.max(0, v.kgNow - v.goalKg))}`, `${show(Math.max(0, v.kgNow - v.goalKg))} to go`)}</div>
+            </div>
+          </div>
+          <div className="mt-3"><Bar2 pct={((n(v.start.kg) - v.kgNow) / Math.max(0.1, n(v.start.kg) - v.goalKg)) * 100} h={8} /></div>
+          <div className="flex justify-between mt-1" style={{ fontSize: 11.5, color: C.ink2, fontFamily: MONO }}>
+            <span>{show(v.start.kg)}</span><span>{show(v.goalKg)}</span>
+          </div>
+          {v.ms && v.pace && (
+            <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${C.rule}`, fontSize: 13.5, lineHeight: 1.55 }}>
+              <div className="flex justify-between items-baseline gap-2">
+                <b>{tr(`${fmtDate(v.ms.date, lang)} 目標 ${show(v.ms.kg)}`, `${show(v.ms.kg)} by ${fmtDate(v.ms.date, lang)}`)}</b>
+                <Chip tone={v.pace.ahead >= -0.3 ? "jade" : "gold"}>{v.pace.ahead >= -0.3 ? tr("進度正常", "on track") : tr("落後", "behind")}</Chip>
+              </div>
+              <div style={{ color: C.ink2, marginTop: 2 }}>
+                {v.pace.weeksLeft > 0
+                  ? tr(`還有 ${v.pace.weeksLeft.toFixed(1)} 星期，每星期要減 ${Math.max(0, v.pace.needPerWeek).toFixed(2)} kg。按計劃今日應約 ${show(v.pace.planNow)}。`,
+                    `${v.pace.weeksLeft.toFixed(1)} weeks left: ${Math.max(0, v.pace.needPerWeek).toFixed(2)} kg a week. The plan has you at about ${show(v.pace.planNow)} today.`)
+                  : tr("檢查日已到。記錄體重，再定下一個目標。", "Checkpoint reached. Log your weight and set the next one.")}
+                {v.pace.needPerWeek > 1 && <span style={{ color: C.red }}> {tr("每星期超過 1 kg 太急，容易流失肌肉和反彈，建議把日期延後。", "More than 1 kg a week is too fast and tends to cost muscle and rebound; push the date out.")}</span>}
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
+
+      <Card>
+        <div className="flex justify-between items-baseline gap-2">
+          <Eyebrow>{tr("今個星期", "This week")}</Eyebrow>
+          <span style={{ fontSize: 12, color: C.ink2 }}>{tr(`約消耗 ${money(v.kcal)} kcal`, `≈ ${money(v.kcal)} kcal burned`)}</span>
+        </div>
+        <div className="flex items-baseline gap-2 mt-1">
+          <Num value={v.minutes} size={22} weight={800} color={v.minutes >= n(h.weeklyMin || 250) ? C.jade : C.ink} />
+          <span style={{ fontSize: 13, color: C.ink2 }}>{tr(`／${n(h.weeklyMin || 250)} 分鐘運動`, `of ${n(h.weeklyMin || 250)} active minutes`)}</span>
+        </div>
+        <div className="mt-2"><Bar2 pct={(v.minutes / Math.max(1, n(h.weeklyMin || 250))) * 100} h={8} /></div>
+        <div className="grid gap-2 mt-3" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", fontSize: 12.5 }}>
+          <div>{tr("游水", "Swim")}<br />{target(v.sessions.swim, n(h.plan?.swim ?? 2))}</div>
+          <div>{tr("重量訓練", "Strength")}<br />{target(v.sessions.strength, n(h.plan?.strength ?? 2))}</div>
+          <div>{tr("跑步／單車", "Run / cycle")}<br />{target(v.sessions.cardio, n(h.plan?.cardio ?? 1))}</div>
+        </div>
+      </Card>
+
+      <Card>
+        <Eyebrow>{tr("記錄運動", "Log a workout")}</Eyebrow>
+        <div className="grid gap-2 mt-2" style={{ gridTemplateColumns: "1fr 1fr" }}>
+          <select className="pb-in" value={af.type} onChange={(e) => setAf({ ...af, type: e.target.value })}>
+            {Object.entries(SPORTS).map(([k, x]) => <option key={k} value={k}>{tr(x[0], x[1])}</option>)}
+          </select>
+          <select className="pb-in" value={af.intensity} onChange={(e) => setAf({ ...af, intensity: +e.target.value })}>
+            <option value={0}>{tr("輕鬆", "Easy")}</option><option value={1}>{tr("中等", "Moderate")}</option><option value={2}>{tr("劇烈", "Hard")}</option>
+          </select>
+          <TextIn type="date" value={af.date} onChange={(x) => setAf({ ...af, date: x })} />
+          <TextIn type="time" value={af.time} onChange={(x) => setAf({ ...af, time: x })} />
+          <Lbl t={tr("分鐘", "Minutes")}><TextIn type="number" right value={af.minutes} onChange={(x) => setAf({ ...af, minutes: x })} /></Lbl>
+          <Lbl t={tr("距離 km（可選）", "Distance km (optional)")}><TextIn type="number" step="0.1" right value={af.km} onChange={(x) => setAf({ ...af, km: x })} /></Lbl>
+        </div>
+        <div className="flex gap-2 mt-2">
+          <input className="pb-in" style={{ flex: 1 }} placeholder={tr("備註（可選）", "Note (optional)")} value={af.note} onChange={(e) => setAf({ ...af, note: e.target.value })} />
+          <Btn tone="solid" onClick={addAct}>{tr("記錄", "Log")}</Btn>
+        </div>
+        <div style={{ fontSize: 12, color: C.ink2, marginTop: 6 }}>
+          {tr("中等＝會喘氣但仍可以說話；劇烈＝只能說幾個字。", "Moderate = breathing harder but can still talk; hard = only a few words at a time.")}
+          {n(af.minutes) > 0 && v.kgNow > 0 && tr(` 估計消耗約 ${money(kcalOf(af, v.kgNow))} kcal。`, ` About ${money(kcalOf(af, v.kgNow))} kcal.`)}
+        </div>
+      </Card>
+
+      <Card>
+        <div className="flex justify-between items-center gap-2">
+          <Eyebrow>{tr("記錄體重", "Log weight")}</Eyebrow>
+          <div className="flex gap-1">
+            {["kg", "lb"].map((u) => (
+              <button key={u} className="pb-btn" onClick={() => setH((s) => { s.unit = u; })}
+                style={{ background: (h.unit || "kg") === u ? C.ink : "transparent", color: (h.unit || "kg") === u ? "#fff" : C.ink, border: `1px solid ${(h.unit || "kg") === u ? C.ink : C.rule}`, fontSize: 12, padding: "3px 10px", minHeight: 30 }}>{u}</button>
+            ))}
+          </div>
+        </div>
+        <div className="flex gap-2 mt-2">
+          <TextIn type="date" value={wf.date} onChange={(x) => setWf({ ...wf, date: x })} />
+          <TextIn type="number" step="0.1" right w={110} placeholder={lbMode ? "lb" : "kg"} value={wf.val} onChange={(x) => setWf({ ...wf, val: x })} />
+          <Btn tone="solid" onClick={addWeight}>{tr("記錄", "Log")}</Btn>
+        </div>
+        <div style={{ fontSize: 12, color: C.ink2, marginTop: 6 }}>{tr("每星期量 2–3 次，同樣是早上起床、去完洗手間、未食嘢。看 7 日平均，不要看單日。", "Weigh 2–3 times a week, same conditions: morning, after the bathroom, before eating. Watch the 7-day average, not single days.")}</div>
+        {chart.length > 1 && (
+          <div style={{ height: 190, marginTop: 10 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chart} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                <CartesianGrid stroke={C.rule} vertical={false} />
+                <XAxis dataKey="ts" type="number" scale="time" domain={["dataMin", "dataMax"]} tick={{ fontSize: 10, fill: C.ink2, fontFamily: MONO }}
+                  tickFormatter={(x) => isoLocal(new Date(x)).slice(5)} tickLine={false} axisLine={{ stroke: C.rule }} minTickGap={24} />
+                <YAxis width={40} tick={{ fontSize: 10, fill: C.ink2, fontFamily: MONO }} tickLine={false} axisLine={false} domain={["dataMin - 1", "dataMax + 1"]} tickFormatter={(x) => n(x).toFixed(0)} />
+                <Tooltip contentStyle={{ background: C.card, border: `1px solid ${C.rule}`, borderRadius: 6, fontSize: 12, fontFamily: MONO }} labelFormatter={(x) => isoLocal(new Date(x))} />
+                <Line type="linear" dataKey="plan" name={tr("計劃", "Plan")} stroke={C.ink2} strokeDasharray="4 3" strokeWidth={1.5} dot={false} connectNulls />
+                <Line type="monotone" dataKey="kg" name={tr("體重", "Weight")} stroke={C.jade} strokeWidth={2.5} dot={{ r: 3 }} connectNulls />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </Card>
+
+      <Card pad="p-0">
+        <div className="p-3" style={{ paddingBottom: 4 }}><Eyebrow>{tr("最近運動", "Recent workouts")}</Eyebrow></div>
+        {v.acts.length === 0 && <div className="px-3 pb-3" style={{ fontSize: 13, color: C.ink2 }}>{tr("未有紀錄。第一課：今個星期游兩次水。", "Nothing yet. First assignment: two swims this week.")}</div>}
+        {v.acts.slice(0, 12).map((a) => (
+          <div key={a.id} className="pb-row px-3 flex justify-between items-center gap-2" style={{ paddingTop: 9, paddingBottom: 9 }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>{tr((SPORTS[a.type] || SPORTS.other)[0], (SPORTS[a.type] || SPORTS.other)[1])} · {a.minutes} {tr("分鐘", "min")}{a.km ? ` · ${a.km} km` : ""}</div>
+              <div style={{ fontSize: 12, color: C.ink2 }}>
+                {new Date(a.date + "T00:00:00").toLocaleDateString(lang === "zh" ? "zh-Hant" : "en-GB", { day: "numeric", month: "short", weekday: "short" })}{a.time ? ` ${a.time}` : ""}
+                {` · ≈${money(kcalOf(a, v.kgNow))} kcal`}{a.note ? ` · ${a.note}` : ""}
+              </div>
+            </div>
+            <RemoveBtn label={tr("刪除", "Delete")} onClick={() => setH((s) => { s.activities = (s.activities || []).filter((x) => x.id !== a.id); })} />
+          </div>
+        ))}
+      </Card>
+
+      <Card>
+        <Eyebrow>{tr("教練計劃", "Coach's plan")}</Eyebrow>
+        <div style={{ fontSize: 13.5, lineHeight: 1.6, marginTop: 6 }}>
+          <div>• {tr(`每日約 ${money(h.kcal)} kcal、蛋白質 ${money(h.protein)} g（每餐有一份手掌大的肉／魚／蛋／豆腐）。`, `About ${money(h.kcal)} kcal and ${money(h.protein)} g protein a day (a palm-sized portion of meat, fish, eggs or tofu at each meal).`)}</div>
+          <div>• {tr(`每星期 ${n(h.plan?.swim ?? 2)} 次游水、${n(h.plan?.strength ?? 2)} 次重量訓練、${n(h.plan?.cardio ?? 1)} 次跑步或踩單車，合共最少 ${n(h.weeklyMin || 250)} 分鐘。`, `Each week: ${n(h.plan?.swim ?? 2)} swims, ${n(h.plan?.strength ?? 2)} strength sessions, ${n(h.plan?.cardio ?? 1)} run or ride — at least ${n(h.weeklyMin || 250)} minutes in all.`)}</div>
+          <div>• {tr("每日行 8,000 步以上；飲品換走糖水和奶茶；每晚睡 7 小時。", "8,000+ steps a day; swap sugary drinks and milk tea; sleep 7 hours.")}</div>
+          <div>• {tr("重量訓練是為了保住肌肉，減的才會是脂肪。", "Strength work keeps the muscle, so what you lose is fat.")}</div>
+        </div>
+        <div className="grid gap-2 mt-3" style={{ gridTemplateColumns: "1fr 1fr 1fr" }}>
+          <Lbl t={tr("每日 kcal", "kcal a day")}><TextIn type="number" right value={h.kcal} onChange={(x) => setH((s) => { s.kcal = x; })} /></Lbl>
+          <Lbl t={tr("蛋白質 g", "Protein g")}><TextIn type="number" right value={h.protein} onChange={(x) => setH((s) => { s.protein = x; })} /></Lbl>
+          <Lbl t={tr("每週分鐘", "Min a week")}><TextIn type="number" right value={h.weeklyMin} onChange={(x) => setH((s) => { s.weeklyMin = x; })} /></Lbl>
+          <Lbl t={tr("檢查日", "Check date")}><TextIn type="date" value={h.milestone?.date || ""} onChange={(x) => setH((s) => { s.milestone = { ...(s.milestone || {}), date: x }; })} /></Lbl>
+          <Lbl t={tr("目標 kg", "Target kg")}><TextIn type="number" step="0.5" right value={h.milestone?.kg} onChange={(x) => setH((s) => { s.milestone = { ...(s.milestone || {}), kg: x }; })} /></Lbl>
+          <Lbl t={tr("目標 BMI", "Goal BMI")}><TextIn type="number" step="0.5" right value={h.goalBmi} onChange={(x) => setH((s) => { s.goalBmi = x; })} /></Lbl>
+        </div>
+        <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 8, lineHeight: 1.5 }}>
+          {tr(`BMI 按衞生署亞洲標準：23–24.9 屬過重，正常上限 22.9（你約 ${show(v.healthyKg)}）。消耗熱量是按運動強度估算。開始較大運動量前，如有心臟、血壓或關節問題，先問醫生。`,
+            `BMI uses the Department of Health's Asian cut-offs: 23–24.9 is overweight; the healthy range tops out at 22.9 (about ${show(v.healthyKg)} for you). Calories burned are estimates from activity intensity. If you have heart, blood-pressure or joint issues, check with a doctor before stepping up training.`)}
+        </div>
+      </Card>
+    </div>
   );
 }
 
