@@ -514,6 +514,8 @@ const fxMidOn = (fx, date, ccy) => {
 
 /* ════════════════════════════════════════════════════════════ */
 /* ── QUICK ENTRY: log one spend in a few taps ────────────────── */
+// Everyday categories, one tap each. [Chinese, English]
+const QUICK_PRESETS = [["交通", "Transport"], ["超市", "Groceries"], ["午餐", "Lunch"], ["八達通", "Octopus top-up"]];
 function QuickEntry({ st, up, lang, onClose, onSaved }) {
   const tr = (zh, en) => (lang === "zh" ? zh : en);
   const [amount, setAmount] = useState("");
@@ -526,6 +528,9 @@ function QuickEntry({ st, up, lang, onClose, onSaved }) {
     border: "none", borderRadius: 999, padding: "8px 13px", fontSize: 14, fontWeight: 700, cursor: "pointer", minHeight: 38,
     background: sel ? (tone || C.jade) : C.chip, color: sel ? C.onJade : C.ink,
   });
+  // Hide a preset if a budget line already has its name, so it isn't shown twice.
+  const presets = QUICK_PRESETS.map(([zh, en], i) => ({ key: "x:" + i, zh, en, label: tr(zh, en) }))
+    .filter((p) => !st.budget.some((b) => [p.zh, p.en].includes((b.name || "").trim())));
   const save = () => {
     if (!n(amount)) { setErr(tr("請輸入金額", "Enter an amount")); return; }
     if (!cat) { setErr(tr("揀一個分類", "Pick a category")); return; }
@@ -533,6 +538,10 @@ function QuickEntry({ st, up, lang, onClose, onSaved }) {
     if (cat === "sudden") {
       name = item.trim() || tr("突然購買", "Sudden purchase");
       tag = { oneOff: true };
+    } else if (cat.startsWith("x:")) {
+      const pr = presets.find((x) => x.key === cat);
+      if (!pr) { setErr(tr("請重新揀分類", "Pick the category again")); return; }
+      name = pr.label; note = item.trim();
     } else if (cat.startsWith("p:")) {
       const p = st.plans.find((x) => x.id === cat.slice(2));
       if (!p) { setErr(tr("找不到這個計劃", "That plan is gone")); return; }
@@ -564,6 +573,9 @@ function QuickEntry({ st, up, lang, onClose, onSaved }) {
         </div>
         <div className="mt-3" style={{ fontSize: 12.5, color: C.ink2 }}>{tr("分類", "Category")}</div>
         <div className="flex flex-wrap gap-2 mt-1">
+          {presets.map((p) => (
+            <button key={p.key} className="pb-tab" onClick={() => { setCat(p.key); setErr(""); }} style={chip(cat === p.key)}>{p.label}</button>
+          ))}
           <button className="pb-tab" onClick={() => { setCat("sudden"); setErr(""); }} style={chip(cat === "sudden", C.gold)}>{tr("突然購買", "Sudden")}</button>
           {st.plans.map((p) => (
             <button key={p.id} className="pb-tab" onClick={() => { setCat("p:" + p.id); setErr(""); }} style={chip(cat === "p:" + p.id, C.jade)}>{tr("計劃 ", "Plan ")}{p.name || tr("未命名", "Untitled")}</button>
@@ -1597,7 +1609,7 @@ function Month({ st, d, up, lang }) {
           </select>
         </div>
         <input className="pb-in mt-2" style={{ width: "100%" }} list="cats" placeholder={L("Category")} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
-        <datalist id="cats">{st.budget.map((b) => <option key={b.id} value={b.name} />)}</datalist>
+        <datalist id="cats">{[...QUICK_PRESETS.map(([zh, en]) => tr(zh, en)), ...st.budget.map((b) => b.name)].map((v) => <option key={v} value={v} />)}</datalist>
         {f.kind === "expense" && (
           <select className="pb-in mt-2" style={{ width: "100%" }} value={f.link} onChange={(e) => setF({ ...f, link: e.target.value })}>
             <option value="">{tr("計入預算分類", "Counts against a budget line")}</option>
