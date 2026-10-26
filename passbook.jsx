@@ -488,8 +488,8 @@ export default function Passbook({ lang = "zh", onSignOut, onLang }) {
   const d = useMemo(() => {
     if (!st) return null;
     const rates = st.settings.rates || { USD: 7.8, CNY: 1.09 };
-    const pay = payInfo(st, rates);
-    const income = pay.net;   // take-home after the employee's 5% MPF; OT is added per month
+    const pay = payInfo(st, rates, n(st.settings.otPlanHours));
+    const income = pay.net;   // take-home after the employee's 5% MPF, incl. the expected OT hours
     const plannedExp = st.budget.filter((b) => b.group !== "Savings").reduce((a, b) => a + toHKD(b.amount, b.ccy || "HKD", rates), 0);
     const plannedSave = st.budget.filter((b) => b.group === "Savings").reduce((a, b) => a + toHKD(b.amount, b.ccy || "HKD", rates), 0);
     const essentials = st.budget.filter((b) => b.group === "Living").reduce((a, b) => a + toHKD(b.amount, b.ccy || "HKD", rates), 0);
@@ -1286,9 +1286,10 @@ function Month({ st, d, up, lang }) {
 
   const rows = st.tx.map((t, i) => ({ t, i })).filter((x) => monthKey(x.t.date) === m).sort((a, b) => a.t.date.localeCompare(b.t.date));
   const extraIn = rows.filter((x) => x.t.kind === "income").reduce((a, x) => a + toHKD(x.t.amount, x.t.ccy || "HKD", rates), 0);
-  const otHours = n(st.ot?.[m]);
+  const otLogged = st.ot?.[m] !== undefined && st.ot?.[m] !== "" && st.ot?.[m] !== null;
+  const otHours = otLogged ? n(st.ot[m]) : n(st.settings.otPlanHours);
   const payM = payInfo(st, rates, otHours);
-  const otNet = payM.net - d.income;   // OT pay less the extra 5% MPF it attracts
+  const otNet = payM.net - payInfo(st, rates, 0).net;   // OT pay less the extra 5% MPF it attracts
   const inflow = payM.net + extraIn;
   let run = inflow;
   const withBal = rows.map((x) => { if (x.t.kind !== "income") run -= toHKD(x.t.amount, x.t.ccy || "HKD", rates); return { ...x, bal: run }; });
@@ -1335,12 +1336,12 @@ function Month({ st, d, up, lang }) {
           <div style={{ minWidth: 0 }}>
             <Eyebrow>{tr("本月加班", "Overtime this month")}</Eyebrow>
             <div style={{ fontSize: 12.5, color: C.ink2, marginTop: 2 }}>
-              {otHours ? tr(`${otHours} 小時 × HK$${money(payM.otRate)} = HK$${money(payM.ot)}，扣強積金後 +HK$${money(otNet, 2)}`, `${otHours} h × HK$${money(payM.otRate)} = HK$${money(payM.ot)}, +HK$${money(otNet, 2)} after MPF`)
+              {otHours ? tr(`${otLogged ? "" : "預計 "}${otHours} 小時 × HK$${money(payM.otRate)} = HK$${money(payM.ot)}，扣強積金後 +HK$${money(otNet, 2)}`, `${otLogged ? "" : "Expected "}${otHours} h × HK$${money(payM.otRate)} = HK$${money(payM.ot)}, +HK$${money(otNet, 2)} after MPF`)
                 : tr(`時薪 HK$${money(payM.otRate)}，輸入時數會加到本月收入`, `HK$${money(payM.otRate)} an hour; hours entered are added to this month's money in`)}
             </div>
           </div>
           <div className="flex items-center gap-1 pb-shrink0">
-            <TextIn type="number" step="0.5" right w={74} value={otHours} onChange={(v) => up((s) => { s.ot = { ...(s.ot || {}), [m]: v }; })} />
+            <TextIn type="number" step="0.5" right w={74} value={otLogged ? st.ot[m] : ""} placeholder={String(n(st.settings.otPlanHours) || 0)} onChange={(v) => up((s) => { s.ot = { ...(s.ot || {}), [m]: v }; })} />
             <span style={{ fontSize: 13, color: C.ink2 }}>{tr("小時", "h")}</span>
           </div>
         </div>
@@ -1495,15 +1496,16 @@ function Plan({ st, d, up, lang }) {
         <table style={{ width: "100%", marginTop: 12, fontSize: 13.5 }}>
           <tbody>
             <tr className="pb-row"><td style={{ padding: "5px 0", color: C.ink2 }}>{lang === "zh" ? "總收入" : "Gross"}</td><td style={{ textAlign: "right" }}><Num value={hk(d.pay.gross, 2)} weight={600} /></td></tr>
+            {d.pay.ot > 0 && <tr className="pb-row"><td style={{ padding: "5px 0", color: C.ink2 }}>{lang === "zh" ? `預計加班（${n(st.settings.otPlanHours)} 小時）` : `Expected OT (${n(st.settings.otPlanHours)} h)`}</td><td style={{ textAlign: "right" }}><Num value={"+" + hk(d.pay.ot, 2)} weight={600} /></td></tr>}
             <tr className="pb-row"><td style={{ padding: "5px 0", color: C.ink2 }}>{lang === "zh" ? "強積金（僱員 5%）" : "MPF (your 5%)"}</td><td style={{ textAlign: "right" }}><Num value={hk(-d.pay.mpf, 2)} weight={600} color={C.ink2} /></td></tr>
             <tr><td style={{ padding: "7px 0", fontWeight: 800 }}>{lang === "zh" ? "每月實收" : "Take-home"}</td><td style={{ textAlign: "right" }}><Num value={hk(d.income, 2)} size={17} weight={800} /></td></tr>
           </tbody>
         </table>
-        <div className="flex items-center gap-2 mt-2" style={{ fontSize: 13, color: C.ink2 }}>
-          <span>{lang === "zh" ? "加班時薪 HK$" : "Overtime per hour HK$"}</span>
-          <TextIn type="number" right w={80} value={st.settings.otRate} onChange={(v) => up((s) => { s.settings.otRate = v; })} />
-          <span>{lang === "zh" ? "（每月加班時數在「月度」輸入）" : "(log hours each month on Month)"}</span>
+        <div className="grid gap-2 mt-2" style={{ gridTemplateColumns: "1fr 1fr" }}>
+          <Lbl t={lang === "zh" ? "加班時薪 HK$" : "Overtime per hour HK$"}><TextIn type="number" right value={st.settings.otRate} onChange={(v) => up((s) => { s.settings.otRate = v; })} /></Lbl>
+          <Lbl t={lang === "zh" ? "預計每月加班（小時）" : "Expected OT a month (h)"}><TextIn type="number" step="0.5" right value={st.settings.otPlanHours} onChange={(v) => up((s) => { s.settings.otPlanHours = v; })} /></Lbl>
         </div>
+        <div style={{ fontSize: 12, color: C.ink2, marginTop: 6 }}>{lang === "zh" ? "每月實際時數在「月度」輸入；未輸入時用預計數字。" : "Log actual hours on Month; until you do, the expected figure is used."}</div>
       </Card>
 
       {groups.map(([g, label]) => {
@@ -1539,7 +1541,7 @@ function Plan({ st, d, up, lang }) {
         <Eyebrow>{L("Does the plan balance?")}</Eyebrow>
         <table style={{ width: "100%", marginTop: 6 }}>
           <tbody style={{ fontSize: 13.5 }}>
-            {[[lang === "zh" ? "實收（已扣強積金）" : "Take-home (after MPF)", d.income, C.jade], [L("Spending"), -d.plannedExp, C.ink], [L("Set aside"), -d.plannedSave, C.gold]].map(([l, v, c]) => (
+            {[[lang === "zh" ? "實收（含預計加班，已扣強積金）" : "Take-home (incl. expected OT, after MPF)", d.income, C.jade], [L("Spending"), -d.plannedExp, C.ink], [L("Set aside"), -d.plannedSave, C.gold]].map(([l, v, c]) => (
               <tr key={l} className="pb-row"><td style={{ padding: "6px 0", color: C.ink2 }}>{l}</td>
                 <td style={{ textAlign: "right" }}><Num value={hk(v)} color={c} /></td></tr>
             ))}
