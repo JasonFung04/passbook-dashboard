@@ -135,6 +135,7 @@ function migrate(s) {
   if (!s.leave) s.leave = { perYear: 12, anchorDate: todayISO(), anchorBalance: 12, days: [] };
   if (!s.events) s.events = [];
   if (!s.plans) s.plans = [];
+  (s.tx || []).forEach((x) => { if (!x.id) x.id = uid(); });   // older entries may have no id, which editing needs
   if (!s.health) s.health = { heightCm: 0, goalBmi: 24, start: null, milestone: null, kcal: 0, protein: 0, weeklyMin: 250, plan: { swim: 2, strength: 2, cardio: 1 }, unit: "kg", weights: [], activities: [] };
   s.tx = (s.tx || []).map((t) => ({ ccy: "HKD", ...t }));
   s.income = (s.income || []).map((r) => ({ ccy: "HKD", ...r }));
@@ -627,6 +628,92 @@ function QuickEntry({ st, up, lang, onClose, onSaved }) {
   );
 }
 
+// Bottom sheet for changing or deleting one ledger entry (tap a row in the Month ledger).
+function EditTx({ st, up, lang, tx, onClose, onFlash }) {
+  const tr = (zh, en) => (lang === "zh" ? zh : en);
+  const [f, setF] = useState({
+    date: tx.date, kind: tx.kind, name: tx.name || "", amount: String(tx.amount), ccy: tx.ccy || "HKD", note: tx.note || "",
+    link: tx.oneOff ? "sudden" : tx.planId && st.plans.some((p) => p.id === tx.planId) ? tx.planId : "",
+  });
+  const [err, setErr] = useState("");
+  const [sure, setSure] = useState(false);
+  const rates = st.settings.rates;
+  const chip = (sel, tone) => ({
+    border: "none", borderRadius: 999, padding: "8px 13px", fontSize: 14, fontWeight: 700, cursor: "pointer", minHeight: 38, whiteSpace: "nowrap", flexShrink: 0,
+    background: sel ? (tone || C.jade) : C.chip, color: sel ? C.onJade : C.ink,
+  });
+  const set = (patch) => { setF((x) => ({ ...x, ...patch })); setErr(""); };
+  const save = () => {
+    const plan = st.plans.find((p) => p.id === f.link);
+    const name = f.name.trim() || (plan ? plan.name : "");
+    if (!n(f.amount)) { setErr(tr("請輸入金額", "Enter an amount")); return; }
+    if (!name) { setErr(tr("請輸入分類或項目", "Enter a category or item")); return; }
+    if (!f.date) { setErr(tr("請揀日期", "Pick a date")); return; }
+    const tag = f.kind === "expense" && f.link === "sudden" ? { oneOff: true } : f.kind === "expense" && plan ? { planId: plan.id } : {};
+    up((s) => {
+      const i = s.tx.findIndex((x) => x.id === tx.id);
+      if (i < 0) return;
+      const { oneOff, planId, ...rest } = s.tx[i];
+      s.tx[i] = { ...rest, date: f.date, kind: f.kind, name, amount: n(f.amount), ccy: f.ccy, note: f.note.trim(), ...tag };
+    });
+    onFlash(tr("✅ 已更新", "✅ Updated"));
+    onClose();
+  };
+  const del = () => {
+    if (!sure) { setSure(true); return; }
+    up((s) => { s.tx = s.tx.filter((x) => x.id !== tx.id); });
+    onFlash(tr("🗑️ 已刪除", "🗑️ Deleted"));
+    onClose();
+  };
+  return (
+    <>
+      <div className="pb-sheet-bg" onClick={onClose} />
+      <div className="pb-sheet" role="dialog" aria-modal="true" aria-label={tr("修改這一筆", "Edit entry")} style={{ maxHeight: "88vh", overflowY: "auto" }}>
+        <div style={{ width: 40, height: 5, borderRadius: 3, background: C.rule, margin: "0 auto 12px" }} />
+        <div className="flex justify-between items-center">
+          <Eyebrow>{tr("修改這一筆", "Edit entry")}</Eyebrow>
+          <button onClick={onClose} className="pb-tab" aria-label={tr("關閉", "Close")} style={{ background: C.chip, border: "none", borderRadius: 999, width: 32, height: 32, fontSize: 16, color: C.ink2, cursor: "pointer" }}>×</button>
+        </div>
+        <div className="flex gap-2 mt-3 flex-wrap">
+          {[["expense", tr("支出", "Spent"), C.jade], ["saving", tr("儲起", "Set aside"), C.gold], ["income", tr("額外收入", "Money in"), C.jade]].map(([k, label, tone]) => (
+            <button key={k} className="pb-tab" onClick={() => set({ kind: k })} style={chip(f.kind === k, tone)}>{label}</button>
+          ))}
+        </div>
+        <div className="flex gap-2 items-center mt-3">
+          <input className="pb-in pb-amount" type="number" inputMode="decimal" aria-label={tr("金額", "Amount")} placeholder="0" value={f.amount} onChange={(e) => set({ amount: e.target.value })}
+            style={{ flex: 1, fontSize: 32, fontWeight: 800, fontFamily: MONO, padding: "8px 12px", textAlign: "right", minWidth: 0 }} />
+          <CcySelect value={f.ccy} onChange={(v) => set({ ccy: v })} />
+        </div>
+        {f.ccy !== "HKD" && n(f.amount) > 0 && <div style={{ fontSize: 13, color: C.ink2, textAlign: "right", marginTop: 4 }}>≈ HK${money(toHKD(f.amount, f.ccy, rates))}</div>}
+        <div className="mt-3" style={{ fontSize: 12.5, color: C.ink2 }}>{tr("分類", "Category")}</div>
+        {st.budget.length > 0 && (
+          <div className="flex flex-wrap gap-2 mt-1">
+            {st.budget.map((b) => (
+              <button key={b.id} className="pb-tab" onClick={() => set({ name: b.name, link: f.link === "sudden" || st.plans.some((p) => p.id === f.link) ? "" : f.link })}
+                style={chip(f.name.trim().toLowerCase() === (b.name || "").trim().toLowerCase() && !f.link)}>{catEmoji(b.name)} {b.name || tr("未命名", "Untitled")}</button>
+            ))}
+          </div>
+        )}
+        <input className="pb-in mt-2" style={{ width: "100%" }} list="cats" aria-label={tr("分類或項目", "Category or item")} placeholder={tr("分類或項目", "Category or item")} value={f.name} onChange={(e) => set({ name: e.target.value })} />
+        {f.kind === "expense" && (
+          <select className="pb-in mt-2" style={{ width: "100%" }} aria-label={tr("計入", "Counts toward")} value={f.link} onChange={(e) => set({ link: e.target.value })}>
+            <option value="">{tr("計入預算分類", "Counts against a budget line")}</option>
+            <option value="sudden">{tr("突然購買（不在預算內）", "Sudden purchase (not budgeted)")}</option>
+            {st.plans.map((p) => <option key={p.id} value={p.id}>{tr("計劃：", "Plan: ")}{p.name || tr("未命名", "Untitled")}</option>)}
+          </select>
+        )}
+        <div className="mt-2"><TextIn type="date" value={f.date} onChange={(v) => set({ date: v })} /></div>
+        <input className="pb-in mt-2" style={{ width: "100%" }} aria-label={tr("備註", "Note")} placeholder={tr("備註（可留空）", "Note (optional)")} value={f.note} onChange={(e) => set({ note: e.target.value })} />
+        {err && <div role="alert" style={{ fontSize: 13, color: C.red, marginTop: 8 }}>{err}</div>}
+        <button className="pb-tab" onClick={save} style={{ width: "100%", marginTop: 16, border: "none", borderRadius: 999, padding: "15px 0", fontSize: 17, fontWeight: 800, background: C.jade, color: C.onJade, cursor: "pointer" }}>{tr("儲存修改 ✓", "Save changes ✓")}</button>
+        <button className="pb-tab" onClick={del} style={{ width: "100%", marginTop: 10, border: "none", borderRadius: 999, padding: "13px 0", fontSize: 15, fontWeight: 700, background: sure ? C.red : C.chip, color: sure ? C.onJade : C.red, cursor: "pointer" }}>
+          {sure ? tr("再按一次確定刪除", "Tap again to delete") : tr("刪除這一筆", "Delete this entry")}
+        </button>
+      </div>
+    </>
+  );
+}
+
 export default function Passbook({ lang = "zh", onSignOut, onLang }) {
   const [st, setSt] = useState(null);
   const [tab, setTab] = useState("overview");
@@ -805,7 +892,7 @@ export default function Passbook({ lang = "zh", onSignOut, onLang }) {
         {tab === "fx" && <Fx st={st} d={d} up={up} lang={lang} />}
         {tab === "leave" && <Leave st={st} d={d} up={up} lang={lang} />}
         {tab === "health" && <Health st={st} d={d} up={up} lang={lang} />}
-        {tab === "month" && <Month st={st} d={d} up={up} lang={lang} />}
+        {tab === "month" && <Month st={st} d={d} up={up} lang={lang} onFlash={(msg) => { quickMsg.current = msg; setFlash(msg); setTimeout(() => setFlash(""), 1600); }} />}
         {tab === "budget" && <Plan st={st} d={d} up={up} lang={lang} />}
         {tab === "goals" && <Goals st={st} d={d} up={up} lang={lang} />}
 
@@ -1528,13 +1615,15 @@ function Deposits({ st, d, up, lang }) {
 }
 
 /* ── MONTH: ledger + P&L + allocation ────────────────────────── */
-function Month({ st, d, up, lang }) {
+function Month({ st, d, up, lang, onFlash }) {
   const L = (key) => t(lang, key);
   const tr = (zh, en) => (lang === "zh" ? zh : en);
   const rates = st.settings.rates;
   const cur = monthKey(todayISO());
   const [m, setM] = useState(d.months.includes(cur) ? cur : d.months[0] || cur);
   const [trend, setTrend] = useState("month");
+  const [editId, setEditId] = useState(null);
+  const editTx = editId ? st.tx.find((x) => x.id === editId) : null;
   const [f, setF] = useState({ date: todayISO(), name: "", kind: "expense", amount: 0, ccy: "HKD", note: "", link: "" });
 
   const rows = st.tx.map((t, i) => ({ t, i })).filter((x) => monthKey(x.t.date) === m).sort((a, b) => a.t.date.localeCompare(b.t.date));
@@ -1639,6 +1728,7 @@ function Month({ st, d, up, lang }) {
 
   return (
     <div className="space-y-4">
+      {editTx && <EditTx key={editTx.id} st={st} up={up} lang={lang} tx={editTx} onClose={() => setEditId(null)} onFlash={onFlash} />}
       <div className="flex items-center gap-2">
         <select className="pb-in" style={{ width: 150, fontWeight: 700 }} value={m} onChange={(e) => setM(e.target.value)}>
           {monthList.map((k) => <option key={k} value={k}>{monthLabel(k, lang)}</option>)}
@@ -1721,6 +1811,7 @@ function Month({ st, d, up, lang }) {
             <Eyebrow>{L("Ledger")} · {monthLabel(m, lang)}</Eyebrow>
             <span style={{ fontSize: 11, color: C.ink2 }}>{tr(`開始結餘 HK$${money(inflow)}`, `opening HK$${money(inflow)}`)}</span>
           </div>
+          {withBal.length > 0 && <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 2 }}>{tr("點一行可以修改或刪除", "Tap a row to edit or delete it")}</div>}
         </div>
         {withBal.length === 0 ? (
           <div className="p-5 text-center" style={{ fontSize: 13, color: C.ink2 }}>{L("Nothing logged yet. Add your first entry above.")}</div>
@@ -1734,7 +1825,8 @@ function Month({ st, d, up, lang }) {
               </tr></thead>
               <tbody>
                 {withBal.map(({ t: tx, i, bal }) => (
-                  <tr key={tx.id} className="pb-row">
+                  <tr key={tx.id} className="pb-row" role="button" tabIndex={0} aria-label={tr("修改 ", "Edit ") + tx.name} style={{ cursor: "pointer" }}
+                    onClick={() => setEditId(tx.id)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setEditId(tx.id); } }}>
                     <td style={{ padding: "8px 10px", fontFamily: MONO, fontSize: 12, color: C.ink2, whiteSpace: "nowrap" }}>{tx.date.slice(5).replace("-", "/")}</td>
                     <td style={{ padding: "8px 10px" }}>
                       {tx.name}
@@ -1747,7 +1839,7 @@ function Month({ st, d, up, lang }) {
                     <td style={{ padding: "8px 10px", textAlign: "right" }}><Num value={`${ccySign(tx.ccy || "HKD")}${money(tx.amount)}`} color={tx.kind === "income" ? C.jade : tx.kind === "saving" ? C.gold : C.ink} /></td>
                     <td style={{ padding: "8px 10px", textAlign: "right" }}><Num value={money(bal)} weight={500} color={bal < 0 ? C.red : C.ink2} /></td>
                     <td style={{ padding: "8px 6px" }}>
-                      <button onClick={() => up((s) => { s.tx.splice(i, 1); })} style={{ background: "none", border: "none", color: C.ink2, cursor: "pointer", fontSize: 15 }} aria-label="Delete entry">×</button>
+                      <span aria-hidden="true" style={{ color: C.ink2, fontSize: 15 }}>›</span>
                     </td>
                   </tr>
                 ))}
