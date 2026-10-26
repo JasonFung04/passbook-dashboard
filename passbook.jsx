@@ -318,6 +318,44 @@ function investInfo(planIn, ibkr, rates) {
   return { plan, snap, fx, pos, valueUSD, costUSD, cashUSD, navHKD, pnlUSD, pnlPct, A, B, weightA, ageDays, hist, dayChange, buy };
 }
 
+/* ── bank deposit rates (weekly server-side refresh) ─────────── */
+const bestFor = (br, ccy, months) => ((br?.data?.rates) || [])
+  .filter((r) => r.ccy === ccy && (!months || n(r.months) === months))
+  .sort((a, b) => n(b.rate) - n(a.rate))[0] || null;
+const bestLine = (br, ccy, lang) => {
+  const tr = (zh, en) => (lang === "zh" ? zh : en);
+  const parts = [3, 6, 12].map((m) => [m, bestFor(br, ccy, m)]).filter(([, r]) => r)
+    .map(([m, r]) => `${r.bank} ${m}${tr("個月", "M")} ${n(r.rate).toFixed(2)}%`);
+  return parts.length ? tr(`今日最佳 ${ccy}：`, `Best ${ccy} today: `) + parts.join(" · ") : null;
+};
+
+/* ── FX: market mid-rates from IBKR (daily) ──────────────────── */
+// `usd` = HKD per 1 USD, `cny` = HKD per 1 RMB (offshore CNH), from USDHKD / USDCNH.
+const PEG_LO = 7.75, PEG_HI = 7.85;
+function fxInfo(rows) {
+  const by = {};
+  for (const r of rows || []) { (by[r.day] ||= { day: r.day })[r.pair] = n(r.close); }
+  const days = Object.values(by).filter((x) => x.USDHKD).sort((a, b) => (a.day < b.day ? -1 : 1))
+    .map((x) => ({ day: x.day, usd: x.USDHKD, cny: x.USDCNH ? +(x.USDHKD / x.USDCNH).toFixed(5) : null }));
+  if (!days.length) return null;
+  const stat = (key) => {
+    const xs = days.map((x) => x[key]).filter((v) => v != null);
+    if (!xs.length) return null;
+    const last = xs[xs.length - 1];
+    const ma = (k) => { const s = xs.slice(-k); return s.reduce((a, b) => a + b, 0) / s.length; };
+    return { last, prev: xs[xs.length - 2] ?? last, first: xs[0], min: Math.min(...xs), max: Math.max(...xs),
+      pct: (xs.filter((v) => v <= last).length / xs.length) * 100, ma1m: ma(22), ma3m: ma(65) };
+  };
+  return { days, usd: stat("usd"), cny: stat("cny"), asOf: days[days.length - 1].day };
+}
+// Market mid on (or just before) a date, for comparing a logged bank quote.
+const fxMidOn = (fx, date, ccy) => {
+  if (!fx) return null;
+  let v = null;
+  for (const x of fx.days) { if (x.day <= date && x[ccy] != null) v = x[ccy]; else if (x.day > date) break; }
+  return v;
+};
+
 /* ════════════════════════════════════════════════════════════ */
 export default function Passbook({ lang = "zh", onSignOut }) {
   const [st, setSt] = useState(null);
@@ -327,6 +365,9 @@ export default function Passbook({ lang = "zh", onSignOut }) {
   const L = (key) => t(lang, key);
 
   const [ibkr, setIbkr] = useState(null);
+  const [mkt, setMkt] = useState(null);
+  // Read-only public data: bank deposit rates (weekly) and market FX (daily).
+  useEffect(() => { window.marketData?.().then(setMkt).catch(() => setMkt(null)); }, []);
   useEffect(() => { (async () => setSt((await load()) || SEED))(); }, []);
   // Read-only: IBKR prices come from the daily server-side sync, never saved back from here.
   useEffect(() => { window.ibkrData?.().then(setIbkr).catch(() => setIbkr(null)); }, []);
@@ -391,12 +432,13 @@ export default function Passbook({ lang = "zh", onSignOut }) {
       months, goalTarget, goalNow, live, depHKD, usdHKD, cnyHKD, blended, idle, nextManual, due30,
       perBank, banks, avgSave, netWorth, emergencyTarget, cover, rates, cashHKD, debtHKD,
       subs, subsMonthly, dueDeps, dueSubs, inv, investedHKD,
+      bankRates: mkt?.rates || null, fx: fxInfo(mkt?.fx || []),
     };
-  }, [st, ibkr]);
+  }, [st, ibkr, mkt]);
 
   if (!st || !d) return <div style={{ padding: 40, fontFamily: MONO, color: C.ink2, background: C.paper }}>{L("Opening Passbook…")}</div>;
 
-  const TABS = [["overview", L("Overview")], ["grow", L("Grow")], ["invest", L("Invest")], ["deposits", L("Deposits")], ["subs", L("Subscriptions")], ["month", L("Month")], ["budget", L("Plan")], ["goals", L("Goals")]];
+  const TABS = [["overview", L("Overview")], ["grow", L("Grow")], ["invest", L("Invest")], ["deposits", L("Deposits")], ["subs", L("Subscriptions")], ["fx", L("FX")], ["month", L("Month")], ["budget", L("Plan")], ["goals", L("Goals")]];
 
   return (
     <div className="pb-root" style={{ background: C.paper, color: C.ink, minHeight: "100vh" }}>
@@ -448,6 +490,7 @@ export default function Passbook({ lang = "zh", onSignOut }) {
         {tab === "deposits" && <Deposits st={st} d={d} up={up} lang={lang} />}
         {tab === "subs" && <Subs st={st} d={d} up={up} lang={lang} />}
         {tab === "invest" && <Invest st={st} d={d} up={up} lang={lang} />}
+        {tab === "fx" && <Fx st={st} d={d} up={up} lang={lang} />}
         {tab === "month" && <Month st={st} d={d} up={up} lang={lang} />}
         {tab === "budget" && <Plan st={st} d={d} up={up} lang={lang} />}
         {tab === "goals" && <Goals st={st} d={d} up={up} lang={lang} />}
@@ -572,7 +615,7 @@ function ComingUp({ d, go, lang }) {
     ...d.dueDeps.map((x) => ({
       id: x.id, tab: "deposits", date: x.i.maturity, left: x.i.left,
       title: `${x.bank} · ${ccySign(x.ccy)}${money(x.principal)} ${tr("定存", "deposit")}`,
-      what: depPlan(x, lang), late: x.i.left <= 0,
+      what: depPlan(x, lang) + (bestLine(d.bankRates, x.ccy, lang) ? "\n" + bestLine(d.bankRates, x.ccy, lang) : ""), late: x.i.left <= 0,
     })),
     ...d.dueSubs.map((x) => ({
       id: x.id, tab: "subs", date: x.i.actBy, left: x.i.left,
@@ -903,6 +946,8 @@ function Deposits({ st, d, up, lang }) {
         <Stat label={L("Maturing in 30 days")} v={d.due30} accent={C.gold} sub={L("needs a decision")} />
       </div>
 
+      <BestRates br={d.bankRates} lang={lang} />
+
       <Card accent={C.blue}>
         <div className="flex justify-between items-center gap-2">
           <Eyebrow color={C.blue}>{L("Maturity ladder · next 12 months")}</Eyebrow>
@@ -972,6 +1017,7 @@ function Deposits({ st, d, up, lang }) {
                 {!x.autoRenew && (x.i.status === "due" || x.i.status === "matured") && (
                   <div style={{ marginTop: 8, padding: "7px 9px", background: x.i.status === "matured" ? C.redSoft : C.goldSoft, borderRadius: 2, fontSize: 12, lineHeight: 1.5, color: C.ink, whiteSpace: "pre-line" }}>
                     <b style={{ color: x.i.status === "matured" ? C.red : C.gold }}>{tr("到期安排：", "At maturity: ")}</b>{depPlan(x, lang)}
+                    {bestLine(d.bankRates, x.ccy, lang) && <div style={{ marginTop: 4, fontWeight: 700 }}>{bestLine(d.bankRates, x.ccy, lang)}</div>}
                   </div>
                 )}
               </button>
@@ -1304,6 +1350,307 @@ function Plan({ st, d, up, lang }) {
               : L("Spare each month. Send it to a goal on the day you're paid, before it drifts.")}
         </div>
       </Card>
+    </div>
+  );
+}
+
+/* ── BEST DEPOSIT RATES (Deposits tab) ───────────────────────── */
+function BestRates({ br, lang }) {
+  const tr = (zh, en) => (lang === "zh" ? zh : en);
+  const [showPromos, setShowPromos] = useState(false);
+  if (!br?.data?.rates?.length) return null;
+  const rates = br.data.rates;
+  const banks = [...new Set(rates.map((r) => r.bank))];
+  const terms = [3, 6, 12];
+  const asOf = new Date(br.as_of);
+  const stale = (Date.now() - asOf.getTime()) / DAY > 10;
+  const table = (ccy) => {
+    const best = Object.fromEntries(terms.map((m) => [m, bestFor(br, ccy, m)]));
+    return (
+      <table style={{ width: "100%", fontSize: 12.5, borderCollapse: "collapse", fontVariantNumeric: "tabular-nums", marginTop: 6 }}>
+        <thead>
+          <tr style={{ color: C.ink2, fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".08em" }}>
+            <th style={{ textAlign: "left", paddingBottom: 3 }}>{ccy}</th>
+            {terms.map((m) => <th key={m} style={{ textAlign: "right" }}>{m}{tr("個月", "M")}</th>)}
+          </tr>
+        </thead>
+        <tbody style={{ fontFamily: MONO }}>
+          {banks.map((b) => (
+            <tr key={b} style={{ borderTop: `1px solid ${C.rule}` }}>
+              <td style={{ padding: "5px 0", fontFamily: "inherit", fontWeight: 700 }}>{b}</td>
+              {terms.map((m) => {
+                const r = rates.find((x) => x.bank === b && x.ccy === ccy && n(x.months) === m);
+                const top = r && best[m] && r.bank === best[m].bank && n(r.rate) === n(best[m].rate);
+                return (
+                  <td key={m} style={{ textAlign: "right", fontWeight: top ? 800 : 500, color: top ? C.jade : r ? C.ink : C.ink2 }}>
+                    {r ? `${n(r.rate).toFixed(2)}%` : "—"}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  };
+  const topUSD = bestFor(br, "USD"), topHKD = bestFor(br, "HKD");
+  return (
+    <Card accent={C.jade}>
+      <div className="flex justify-between items-baseline gap-2">
+        <Eyebrow color={C.jade}>{tr("三間銀行最新定存利率", "Best deposit rates at your banks")}</Eyebrow>
+        <span style={{ fontSize: 11, color: stale ? C.red : C.ink2, whiteSpace: "nowrap" }}>{fmtShort(asOf, lang)}</span>
+      </div>
+      {topHKD && topUSD && (
+        <div style={{ fontSize: 12.5, marginTop: 4, lineHeight: 1.5 }}>
+          {tr(<>港元最高：<b>{topHKD.bank} {topHKD.months} 個月 {n(topHKD.rate).toFixed(2)}%</b>；美元最高：<b>{topUSD.bank} {topUSD.months} 個月 {n(topUSD.rate).toFixed(2)}%</b>。</>,
+            <>Top HKD: <b>{topHKD.bank} {topHKD.months}M {n(topHKD.rate).toFixed(2)}%</b>. Top USD: <b>{topUSD.bank} {topUSD.months}M {n(topUSD.rate).toFixed(2)}%</b>.</>)}
+        </div>
+      )}
+      {table("HKD")}
+      {table("USD")}
+      <div style={{ fontSize: 11, color: C.ink2, marginTop: 8, lineHeight: 1.5 }}>
+        {tr("新資金利率：由另一間銀行轉入的錢才計。同一間銀行到期續存，利率可能較低，確認前先看銀行 App 顯示的利率。每週自動更新。",
+          "New-funds rates: only money moved in from another bank qualifies. Renewing at the same bank may get less, so check the rate the bank app shows before confirming. Refreshed weekly.")}
+        {stale && <b style={{ color: C.red }}> {tr("資料超過 10 日未更新。", "Data is over 10 days old.")}</b>}
+      </div>
+      {(br.data.promos || []).length > 0 && (
+        <div className="mt-2">
+          <button className="pb-btn" onClick={() => setShowPromos(!showPromos)}
+            style={{ background: "transparent", border: `1px solid ${C.rule}`, color: C.ink2, fontSize: 11.5, padding: "4px 9px" }}>
+            {showPromos ? tr("收起短期優惠", "Hide short-term offers") : tr(`短期換匯優惠（${br.data.promos.length}）`, `Short-term FX offers (${br.data.promos.length})`)}
+          </button>
+          {showPromos && br.data.promos.map((p, i) => (
+            <div key={i} style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
+              <b>{p.bank}</b> · {p.text}{" "}
+              {p.src && <a href={p.src} target="_blank" rel="noreferrer" style={{ color: C.blue }}>{tr("來源", "source")}</a>}
+            </div>
+          ))}
+          {showPromos && (
+            <div style={{ fontSize: 11, color: C.ink2, marginTop: 6, lineHeight: 1.5 }}>
+              {tr("這類 7 日／1 個月高息要先把港元換成外幣，換匯差價往往會吃掉大部分利息，只適合本來就要換的錢。",
+                "These 7-day/1-month headline rates need you to convert HKD first; the FX spread often eats most of the interest, so they only make sense for money you were converting anyway.")}
+            </div>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/* ── FX: HKD ↔ USD / RMB trend and timing ────────────────────── */
+function Fx({ st, d, up, lang }) {
+  const tr = (zh, en) => (lang === "zh" ? zh : en);
+  const fx = d.fx;
+  const [range, setRange] = useState(65);
+  const [q, setQ] = useState({ date: todayISO(), bank: "Hang Seng", ccy: "USD", buy: "", sell: "" });
+  if (!fx) {
+    return <Card accent={C.gold}><div style={{ fontSize: 13, color: C.ink2 }}>{tr("匯率資料載入中，或每日同步未運行。", "FX data is loading, or the daily sync hasn't run.")}</div></Card>;
+  }
+  const u = fx.usd, c = fx.cny;
+  const series = fx.days.slice(-range);
+  const quotes = (st.fxQuotes || []).slice().sort((a, b) => (a.date < b.date ? 1 : -1));
+  const lastQuote = (ccy) => quotes.find((x) => x.ccy === ccy && n(x.buy) && n(x.sell));
+  const markup = (x) => {
+    const mid = fxMidOn(fx, x.date, x.ccy === "USD" ? "usd" : "cny");
+    return mid ? { mid, buy: ((mid - n(x.buy)) / mid) * 100, sell: ((n(x.sell) - mid) / mid) * 100 } : null;
+  };
+  const est = (ccy) => {
+    const qq = lastQuote(ccy); const m = qq && markup(qq); const mid = ccy === "USD" ? u.last : c?.last;
+    return m && mid ? { buy: mid * (1 - m.buy / 100), sell: mid * (1 + m.sell / 100), from: qq } : null;
+  };
+  const chg = (s) => ((s.last - s.first) / s.first) * 100;
+  const bandPos = Math.max(0, Math.min(100, ((u.last - PEG_LO) / (PEG_HI - PEG_LO)) * 100));
+
+  // Rules, not forecasts. USD: the peg caps the range, so position in the
+  // band is what matters. RMB floats, so compare with its own past year.
+  const usdAdvice = bandPos >= 80
+    ? { tone: "gold",
+        buy: tr("買美元：偏貴。港元貼近弱方 7.85，現在換美元已接近聯繫匯率下的最高成本（最多再貴約 0.1%）。定期買入（例如 IBKR 季度買入）照做即可，差距很小；大額又不急，可以等匯率回落。",
+          "Buying USD: on the expensive side. HKD is near the weak end (7.85), so USD costs close to the most it can under the peg (at most ~0.1% more). For regular buys like your IBKR quarter, just go ahead — the difference is small; for a large, non-urgent amount, waiting for a dip can help."),
+        sell: tr("賣美元換港元：好時機。現在每 1 美元換到的港元，已接近聯繫匯率下最多的水平。", "Selling USD for HKD: a good time. You're getting close to the most HKD per USD the peg allows.") }
+    : bandPos <= 20
+      ? { tone: "jade",
+          buy: tr("買美元：好時機。港元貼近強方 7.75，美元接近聯繫匯率下最便宜的水平。", "Buying USD: a good time. HKD is near the strong end (7.75), so USD is close to the cheapest the peg allows."),
+          sell: tr("賣美元：偏差。現在換港元會換得較少，不急就等。", "Selling USD: poor. You'd get fewer HKD; if it can wait, wait.") }
+      : { tone: "grey",
+          buy: tr("買美元：中性。匯率在聯繫匯率區間中段，按需要換即可。", "Buying USD: neutral. The rate is mid-band; convert as you need."),
+          sell: tr("賣美元：中性。", "Selling USD: neutral.") };
+  const cnyAdvice = !c ? null : c.pct >= 80
+    ? { tone: "gold",
+        buy: tr(`買人民幣：偏貴。現價比過去一年 ${c.pct.toFixed(0)}% 的日子都高。只換近期要用的錢，或分月換，不要一次過換大額。`,
+          `Buying RMB: expensive. It's higher than on ${c.pct.toFixed(0)}% of days in the past year. Convert only what you need soon, or split it monthly rather than one big conversion.`),
+        sell: tr("賣人民幣換港元：好時機，接近一年高位。", "Selling RMB for HKD: a good time, near the 1-year high.") }
+    : c.pct <= 20
+      ? { tone: "jade",
+          buy: tr(`買人民幣：好時機。現價比過去一年 ${(100 - c.pct).toFixed(0)}% 的日子都低，可以預先換未來幾個月要用的錢。`,
+            `Buying RMB: a good time. It's lower than on ${(100 - c.pct).toFixed(0)}% of days in the past year; consider converting what you'll need over the next few months.`),
+          sell: tr("賣人民幣：偏差，不急就等。", "Selling RMB: poor; if it can wait, wait.") }
+      : { tone: "grey",
+          buy: tr("買人民幣：中性，處於一年區間中段。", "Buying RMB: neutral, mid-range for the past year."),
+          sell: tr("賣人民幣：中性。", "Selling RMB: neutral.") };
+  const trend = (s) => (s.ma1m > s.ma3m * 1.002 ? tr("近月走高", "rising lately") : s.ma1m < s.ma3m * 0.998 ? tr("近月走低", "falling lately") : tr("近月平穩", "flat lately"));
+
+  const RangeBtns = () => (
+    <div className="flex gap-1">
+      {[[22, tr("1個月", "1M")], [65, tr("3個月", "3M")], [130, tr("6個月", "6M")], [400, tr("1年", "1Y")]].map(([k, l]) => (
+        <button key={k} className="pb-btn" onClick={() => setRange(k)}
+          style={{ background: range === k ? C.ink : "transparent", color: range === k ? "#fff" : C.ink, border: `1px solid ${range === k ? C.ink : C.rule}`, fontSize: 11, padding: "3px 8px" }}>{l}</button>
+      ))}
+    </div>
+  );
+  const chart = (key, color, peg) => (
+    <div style={{ height: 180, marginTop: 8 }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={series} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+          <CartesianGrid stroke={C.rule} vertical={false} />
+          <XAxis dataKey="day" tick={{ fontSize: 10, fill: C.ink2, fontFamily: MONO }} tickFormatter={(x) => String(x).slice(5)} tickLine={false} axisLine={{ stroke: C.rule }} minTickGap={28} />
+          <YAxis width={46} tick={{ fontSize: 10, fill: C.ink2, fontFamily: MONO }} tickLine={false} axisLine={false}
+            domain={peg ? [PEG_LO - 0.005, PEG_HI + 0.005] : ["auto", "auto"]} tickFormatter={(x) => n(x).toFixed(peg ? 2 : 3)} />
+          <Tooltip contentStyle={{ background: C.card, border: `1px solid ${C.rule}`, borderRadius: 2, fontSize: 12, fontFamily: MONO }} formatter={(v) => [n(v).toFixed(4), "HKD"]} />
+          {peg && <ReferenceLine y={PEG_HI} stroke={C.red} strokeDasharray="4 3" label={{ value: "7.85", position: "insideTopRight", fontSize: 10, fill: C.red }} />}
+          {peg && <ReferenceLine y={PEG_LO} stroke={C.jade} strokeDasharray="4 3" label={{ value: "7.75", position: "insideBottomRight", fontSize: 10, fill: C.jade }} />}
+          <Line type="monotone" dataKey={key} stroke={color} strokeWidth={2} dot={false} />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+  const advice = (a) => (
+    <div style={{ fontSize: 12.5, lineHeight: 1.55, marginTop: 8 }}>
+      <div style={{ padding: "7px 9px", background: a.tone === "gold" ? C.goldSoft : a.tone === "jade" ? C.jadeSoft : "#E4E9E4", borderRadius: 2 }}>{a.buy}</div>
+      <div style={{ padding: "7px 9px", marginTop: 4, background: "#EEF2EE", borderRadius: 2 }}>{a.sell}</div>
+    </div>
+  );
+  const estRow = (ccy) => {
+    const e = est(ccy);
+    return e ? (
+      <div style={{ fontSize: 12, marginTop: 8, fontFamily: MONO }}>
+        {tr(`${e.from.bank} 估算今日：買入 ${e.buy.toFixed(4)} · 賣出 ${e.sell.toFixed(4)}`, `${e.from.bank} est. today: buys ${e.buy.toFixed(4)} · sells ${e.sell.toFixed(4)}`)}
+        <span style={{ fontFamily: "inherit", color: C.ink2 }}> {tr(`（按你 ${e.from.date} 記錄的差價推算）`, `(from the spread you logged on ${e.from.date})`)}</span>
+      </div>
+    ) : null;
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3">
+        <Card accent={C.blue} pad="p-3">
+          <Eyebrow>{tr("1 美元", "US$1")}</Eyebrow>
+          <div className="mt-1"><Num value={u.last.toFixed(4)} prefix="HK$" size={18} weight={800} /></div>
+          <div style={{ fontSize: 11, color: C.ink2 }}>{tr(`一年 ${chg(u) >= 0 ? "+" : ""}${chg(u).toFixed(2)}% · ${trend(u)}`, `1y ${chg(u) >= 0 ? "+" : ""}${chg(u).toFixed(2)}% · ${trend(u)}`)}</div>
+        </Card>
+        {c && (
+          <Card accent={C.red} pad="p-3">
+            <Eyebrow>{tr("1 人民幣", "¥1 RMB")}</Eyebrow>
+            <div className="mt-1"><Num value={c.last.toFixed(4)} prefix="HK$" size={18} weight={800} /></div>
+            <div style={{ fontSize: 11, color: C.ink2 }}>{tr(`一年 ${chg(c) >= 0 ? "+" : ""}${chg(c).toFixed(2)}% · ${trend(c)}`, `1y ${chg(c) >= 0 ? "+" : ""}${chg(c).toFixed(2)}% · ${trend(c)}`)}</div>
+          </Card>
+        )}
+      </div>
+
+      <Card accent={C.blue}>
+        <div className="flex justify-between items-center gap-2 flex-wrap">
+          <Eyebrow color={C.blue}>{tr("港元 ↔ 美元", "HKD ↔ USD")}</Eyebrow>
+          <RangeBtns />
+        </div>
+        {chart("usd", C.blue, true)}
+        <div style={{ fontSize: 12, color: C.ink2, marginTop: 4 }}>
+          {tr(`聯繫匯率區間 7.75–7.85，現價位於區間 ${bandPos.toFixed(0)}% 位置（0% = 美元最便宜）。一年範圍 ${u.min.toFixed(4)}–${u.max.toFixed(4)}。`,
+            `Peg band 7.75–7.85; today sits at ${bandPos.toFixed(0)}% of the band (0% = USD cheapest). 1-year range ${u.min.toFixed(4)}–${u.max.toFixed(4)}.`)}
+        </div>
+        {advice(usdAdvice)}
+        {estRow("USD")}
+      </Card>
+
+      {c && cnyAdvice && (
+        <Card accent={C.red}>
+          <div className="flex justify-between items-center gap-2 flex-wrap">
+            <Eyebrow color={C.red}>{tr("港元 ↔ 人民幣", "HKD ↔ RMB")}</Eyebrow>
+            <RangeBtns />
+          </div>
+          {chart("cny", C.red, false)}
+          <div style={{ fontSize: 12, color: C.ink2, marginTop: 4 }}>
+            {tr(`一年範圍 ${c.min.toFixed(4)}–${c.max.toFixed(4)}；現價高於過去一年 ${c.pct.toFixed(0)}% 的日子。`,
+              `1-year range ${c.min.toFixed(4)}–${c.max.toFixed(4)}; today is higher than on ${c.pct.toFixed(0)}% of days in that year.`)}
+          </div>
+          {advice(cnyAdvice)}
+          {estRow("CNY")}
+        </Card>
+      )}
+
+      <Card accent={C.gold}>
+        <Eyebrow color={C.gold}>{tr("記錄銀行牌價", "Log a bank rate")}</Eyebrow>
+        <div style={{ fontSize: 12, color: C.ink2, marginTop: 4, lineHeight: 1.5 }}>
+          {tr("恒生的電匯牌價網頁用程式載入，無法自動讀取。換匯時把恒生 App 顯示的買入／賣出價記下，這裡會算出它比市場價差多少，並用來估算之後每日的恒生牌價。",
+            "Hang Seng's rate page loads by script and can't be read automatically. When you convert, log the buy/sell the Hang Seng app shows; this works out its markup over the market rate and uses it to estimate Hang Seng's rate each day after.")}
+        </div>
+        <div className="grid grid-cols-2 gap-2 mt-2">
+          <Lbl t={tr("日期", "Date")}><TextIn type="date" value={q.date} onChange={(v) => setQ({ ...q, date: v })} /></Lbl>
+          <Lbl t={tr("銀行", "Bank")}>
+            <select className="pb-in" style={{ width: "100%" }} value={q.bank} onChange={(e) => setQ({ ...q, bank: e.target.value })}>
+              {["Hang Seng", "BOCHK", "Mox"].map((b) => <option key={b} value={b}>{b}</option>)}
+            </select>
+          </Lbl>
+          <Lbl t={tr("貨幣（每 1 單位兌港元）", "Currency (HKD per 1)")}>
+            <select className="pb-in" style={{ width: "100%" }} value={q.ccy} onChange={(e) => setQ({ ...q, ccy: e.target.value })}>
+              <option value="USD">USD</option><option value="CNY">RMB</option>
+            </select>
+          </Lbl>
+          <div />
+          <Lbl t={tr("銀行買入價", "Bank buys at")}><TextIn type="number" step="0.0001" right value={q.buy} onChange={(v) => setQ({ ...q, buy: v })} /></Lbl>
+          <Lbl t={tr("銀行賣出價", "Bank sells at")}><TextIn type="number" step="0.0001" right value={q.sell} onChange={(v) => setQ({ ...q, sell: v })} /></Lbl>
+        </div>
+        <div className="mt-2">
+          <Btn size="sm" tone="solid" onClick={() => {
+            if (!n(q.buy) || !n(q.sell)) return;
+            up((s) => { s.fxQuotes = [...(s.fxQuotes || []), { id: uid(), ...q, buy: n(q.buy), sell: n(q.sell) }]; });
+            setQ({ ...q, buy: "", sell: "" });
+          }}>{tr("記錄", "Save")}</Btn>
+        </div>
+        {quotes.length > 0 && (
+          <table className="mt-3" style={{ width: "100%", fontSize: 12, borderCollapse: "collapse", fontVariantNumeric: "tabular-nums" }}>
+            <thead>
+              <tr style={{ color: C.ink2, fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".06em" }}>
+                <th style={{ textAlign: "left" }}>{tr("日期", "Date")}</th><th style={{ textAlign: "left" }}>{tr("銀行", "Bank")}</th>
+                <th style={{ textAlign: "right" }}>{tr("買入／賣出", "Buy / sell")}</th><th style={{ textAlign: "right" }}>{tr("差價", "Markup")}</th><th />
+              </tr>
+            </thead>
+            <tbody style={{ fontFamily: MONO }}>
+              {quotes.slice(0, 8).map((x) => {
+                const m = markup(x);
+                return (
+                  <tr key={x.id} style={{ borderTop: `1px solid ${C.rule}` }}>
+                    <td style={{ padding: "5px 0" }}>{String(x.date).slice(5)}</td>
+                    <td style={{ fontFamily: "inherit" }}>{x.bank} {x.ccy === "CNY" ? "RMB" : x.ccy}</td>
+                    <td style={{ textAlign: "right" }}>{n(x.buy).toFixed(4)} / {n(x.sell).toFixed(4)}</td>
+                    <td style={{ textAlign: "right" }}>{m ? `${m.buy.toFixed(2)}% / ${m.sell.toFixed(2)}%` : "—"}</td>
+                    <td style={{ textAlign: "right" }}>
+                      <button className="pb-btn" aria-label={tr("刪除", "Delete")} onClick={() => up((s) => { s.fxQuotes = (s.fxQuotes || []).filter((z) => z.id !== x.id); })}
+                        style={{ background: "transparent", border: "none", color: C.red, fontSize: 12, padding: "0 0 0 6px" }}>✕</button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </Card>
+
+      <Card accent={C.ink2}>
+        <Eyebrow>{tr("App 內的換算匯率", "Rates the app converts with")}</Eyebrow>
+        <div className="flex justify-between items-center gap-2 mt-2 flex-wrap" style={{ fontSize: 12.5 }}>
+          <span style={{ fontFamily: MONO }}>
+            {tr("目前：", "Now: ")}USD {n(st.settings.rates.USD).toFixed(4)} · RMB {n(st.settings.rates.CNY).toFixed(4)}
+          </span>
+          <Btn size="sm" onClick={() => up((s) => { s.settings.rates.USD = +u.last.toFixed(4); if (c) s.settings.rates.CNY = +c.last.toFixed(4); })}>
+            {tr(`改用市場價 ${u.last.toFixed(4)} · ${c ? c.last.toFixed(4) : "—"}`, `Use market ${u.last.toFixed(4)} · ${c ? c.last.toFixed(4) : "—"}`)}
+          </Btn>
+        </div>
+      </Card>
+
+      <div style={{ fontSize: 11.5, color: C.ink2, lineHeight: 1.5 }}>
+        {tr(`市場中間價來自 IBKR，每日早上更新（最新：${fx.asOf}）。人民幣用離岸人民幣（CNH），香港銀行的人民幣牌價以它為基準。建議只按過去一年的區間判斷，不是預測；銀行牌價差通常比每日波動大，所以在哪裏換往往比何時換更重要。`,
+          `Market mid-rates come from IBKR and update each morning (latest: ${fx.asOf}). RMB uses offshore RMB (CNH), which HK banks price from. The advice only compares with the past year's range; it isn't a forecast. A bank's buy/sell spread is usually bigger than a day's move, so where you convert often matters more than when.`)}
+      </div>
     </div>
   );
 }
