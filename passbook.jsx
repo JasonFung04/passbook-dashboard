@@ -124,6 +124,7 @@ function migrate(s) {
   if (!s.subs) s.subs = [];
   if (!s.invest) s.invest = structuredClone(INVEST_DEFAULT);
   if (!s.invest.done) s.invest.done = {};
+  if (!s.mpf) s.mpf = { history: [] };
   s.tx = (s.tx || []).map((t) => ({ ccy: "HKD", ...t }));
   s.income = (s.income || []).map((r) => ({ ccy: "HKD", ...r }));
   s.budget = (s.budget || []).map((r) => ({ ccy: "HKD", ...r }));
@@ -318,6 +319,30 @@ function investInfo(planIn, ibkr, rates) {
   return { plan, snap, fx, pos, valueUSD, costUSD, cashUSD, navHKD, pnlUSD, pnlPct, A, B, weightA, ageDays, hist, dayChange, buy };
 }
 
+/* ── MPF maths ───────────────────────────────────────────────── */
+// Mandatory contributions: 5% each side on relevant income, capped at
+// HK$1,500 a month each (employee pays nothing below HK$7,100 a month).
+const MPF_STALE_DAYS = 90;
+function mpfInfo(m, salary) {
+  const history = [...(m?.history || [])].filter((h) => h.date && n(h.balance)).sort((a, b) => (a.date < b.date ? -1 : 1));
+  const er = Math.min(n(salary) * 0.05, 1500);
+  const ee = n(salary) < 7100 ? 0 : Math.min(n(salary) * 0.05, 1500);
+  const monthly = n(m?.monthly) || ee + er;
+  const first = history[0] || null, last = history[history.length - 1] || null;
+  const monthsBetween = (a, b) => Math.max(0, Math.floor(daysBetween(a, b) / 30.44));
+  const monthsSince = last ? monthsBetween(last.date, new Date()) : 0;
+  const est = last ? n(last.balance) + monthsSince * monthly : 0;
+  let gain = null, gainPct = 0;
+  if (first && last && first !== last) {
+    const contrib = monthsBetween(first.date, last.date) * monthly;
+    gain = n(last.balance) - n(first.balance) - contrib;
+    const base = n(first.balance) + contrib / 2;   // simple money-weighted approximation
+    gainPct = base ? (gain / base) * 100 : 0;
+  }
+  const age = last ? daysBetween(last.date, new Date()) : Infinity;
+  return { history, ee, er, monthly, first, last, monthsSince, est, gain, gainPct, age, stale: !!last && age > MPF_STALE_DAYS, empty: !last };
+}
+
 /* ── bank deposit rates (weekly server-side refresh) ─────────── */
 const bestFor = (br, ccy, months) => ((br?.data?.rates) || [])
   .filter((r) => r.ccy === ccy && (!months || n(r.months) === months))
@@ -433,6 +458,7 @@ export default function Passbook({ lang = "zh", onSignOut }) {
       perBank, banks, avgSave, netWorth, emergencyTarget, cover, rates, cashHKD, debtHKD,
       subs, subsMonthly, dueDeps, dueSubs, inv, investedHKD,
       bankRates: mkt?.rates || null, fx: fxInfo(mkt?.fx || []),
+      mpf: mpfInfo(st.mpf, income),
     };
   }, [st, ibkr, mkt]);
 
@@ -617,6 +643,13 @@ function ComingUp({ d, go, lang }) {
       title: `${x.bank} · ${ccySign(x.ccy)}${money(x.principal)} ${tr("定存", "deposit")}`,
       what: depPlan(x, lang) + (bestLine(d.bankRates, x.ccy, lang) ? "\n" + bestLine(d.bankRates, x.ccy, lang) : ""), late: x.i.left <= 0,
     })),
+    ...(d.mpf.stale || d.mpf.empty ? [{
+      id: "mpf", tab: "invest",
+      date: d.mpf.last ? new Date(new Date(d.mpf.last.date).getTime() + MPF_STALE_DAYS * DAY) : new Date(),
+      left: d.mpf.last ? MPF_STALE_DAYS - d.mpf.age : 0, late: d.mpf.stale,
+      title: tr("更新強積金結餘", "Update your MPF balance"),
+      what: tr("打開 eMPF App，把總結餘抄到「投資 › 強積金」，或把截圖發給 Claude。", "Open the eMPF app and copy the total into Invest › MPF, or send Claude a screenshot."),
+    }] : []),
     ...d.dueSubs.map((x) => ({
       id: x.id, tab: "subs", date: x.i.actBy, left: x.i.left,
       title: x.name || tr("未命名", "Untitled"),
@@ -1671,12 +1704,15 @@ function Invest({ st, d, up, lang }) {
 
   if (!v.snap) {
     return (
-      <Card accent={C.gold}>
-        <Eyebrow color={C.gold}>{tr("未有 IBKR 數據", "No IBKR data yet")}</Eyebrow>
-        <div style={{ fontSize: 13, color: C.ink2, marginTop: 6, lineHeight: 1.5 }}>
-          {tr("每日同步會在早上把 IBKR 的持倉和價格寫進來。第一次同步後，這裡會顯示持倉、回報和下一次買入。", "A daily sync writes your IBKR holdings and prices here each morning. After the first one, this tab shows holdings, return and your next buy.")}
-        </div>
-      </Card>
+      <div className="space-y-4">
+        <Card accent={C.gold}>
+          <Eyebrow color={C.gold}>{tr("未有 IBKR 數據", "No IBKR data yet")}</Eyebrow>
+          <div style={{ fontSize: 13, color: C.ink2, marginTop: 6, lineHeight: 1.5 }}>
+            {tr("每日同步會在早上把 IBKR 的持倉和價格寫進來。第一次同步後，這裡會顯示持倉、回報和下一次買入。", "A daily sync writes your IBKR holdings and prices here each morning. After the first one, this tab shows holdings, return and your next buy.")}
+          </div>
+        </Card>
+        <Mpf st={st} d={d} up={up} lang={lang} />
+      </div>
     );
   }
 
@@ -1831,6 +1867,8 @@ function Invest({ st, d, up, lang }) {
         </div>
       </Card>
 
+      <Mpf st={st} d={d} up={up} lang={lang} />
+
       <Card accent={C.blue}>
         <Eyebrow color={C.blue}>{tr("買入計劃", "Buy plan")}</Eyebrow>
         <div className="grid grid-cols-2 gap-2 mt-2">
@@ -1856,6 +1894,77 @@ function Invest({ st, d, up, lang }) {
         )}
       </Card>
     </div>
+  );
+}
+
+/* ── MPF: balance logged by hand from the eMPF app ───────────── */
+function Mpf({ st, d, up, lang }) {
+  const tr = (zh, en) => (lang === "zh" ? zh : en);
+  const m = d.mpf;
+  const [form, setForm] = useState({ date: todayISO(), balance: "" });
+  const add = () => {
+    if (!n(form.balance)) return;
+    up((s) => { s.mpf ||= { history: [] }; s.mpf.history = [...(s.mpf.history || []), { id: uid(), date: form.date, balance: n(form.balance) }]; });
+    setForm({ date: todayISO(), balance: "" });
+  };
+  return (
+    <Card accent={m.stale ? C.gold : C.blue}>
+      <div className="flex justify-between items-baseline gap-2">
+        <Eyebrow color={C.blue}>{tr("強積金", "MPF")}</Eyebrow>
+        {m.last && <span style={{ fontSize: 11, color: m.stale ? C.red : C.ink2 }}>{tr(`${fmtDate(m.last.date, lang)} 更新`, `updated ${fmtDate(m.last.date, lang)}`)}</span>}
+      </div>
+      {m.last ? (
+        <>
+          <div className="flex justify-between items-end gap-3 mt-1">
+            <div style={{ minWidth: 0 }}>
+              <Num value={money(m.last.balance)} prefix="HK$" size={22} weight={800} wrap />
+              <div style={{ fontSize: 11.5, color: C.ink2 }}>{tr("上次記錄的結餘", "last logged balance")}</div>
+            </div>
+            {m.monthsSince > 0 && (
+              <div className="text-right pb-shrink0">
+                <Num value={money(m.est)} prefix="≈ HK$" size={15} weight={700} color={C.ink2} />
+                <div style={{ fontSize: 11, color: C.ink2 }}>{tr(`今日估算（+${m.monthsSince} 個月供款）`, `est. today (+${m.monthsSince} mo of contributions)`)}</div>
+              </div>
+            )}
+          </div>
+          <div style={{ fontSize: 12, color: C.ink2, marginTop: 8, lineHeight: 1.5 }}>
+            {tr(`每月供款約 HK$${money(m.monthly)}：你 HK$${money(m.ee, 2)} + 公司 HK$${money(m.er, 2)}（各 5%，上限 HK$1,500）。`,
+              `About HK$${money(m.monthly)} goes in each month: you HK$${money(m.ee, 2)} + employer HK$${money(m.er, 2)} (5% each, capped at HK$1,500).`)}
+            {m.gain !== null
+              ? tr(` 由 ${fmtDate(m.first.date, lang)} 起，扣除供款後的投資回報約 ${m.gain < 0 ? "−" : ""}HK$${money(Math.abs(m.gain))}（${m.gainPct >= 0 ? "+" : ""}${m.gainPct.toFixed(1)}%）。`,
+                ` Since ${fmtDate(m.first.date, lang)}, investment return after contributions is about ${m.gain < 0 ? "−" : ""}HK$${money(Math.abs(m.gain))} (${m.gainPct >= 0 ? "+" : ""}${m.gainPct.toFixed(1)}%).`)
+              : tr(" 下次再記錄一次結餘，就能算出扣除供款後的投資回報。", " Log the balance again next time to see the investment return after contributions.")}
+          </div>
+          <div style={{ fontSize: 12, marginTop: 6 }}>
+            {tr(`連強積金計，淨資產約 HK$${money(d.netWorth + m.est)}。`, `Including MPF, net worth is about HK$${money(d.netWorth + m.est)}.`)}
+          </div>
+        </>
+      ) : (
+        <div style={{ fontSize: 12.5, color: C.ink2, marginTop: 6 }}>{tr("還沒有記錄。", "Nothing logged yet.")}</div>
+      )}
+      <div className="grid grid-cols-2 gap-2 mt-3">
+        <Lbl t={tr("日期", "Date")}><TextIn type="date" value={form.date} onChange={(x) => setForm({ ...form, date: x })} /></Lbl>
+        <Lbl t={tr("eMPF 總結餘 HK$", "eMPF total HK$")}><TextIn type="number" right value={form.balance} onChange={(x) => setForm({ ...form, balance: x })} /></Lbl>
+      </div>
+      <div className="mt-2"><Btn size="sm" tone="solid" onClick={add}>{tr("記錄結餘", "Log balance")}</Btn></div>
+      {m.history.length > 0 && (
+        <div className="mt-3" style={{ fontSize: 12, fontFamily: MONO }}>
+          {m.history.slice().reverse().slice(0, 6).map((h) => (
+            <div key={h.id || h.date} className="flex justify-between items-center gap-2" style={{ padding: "3px 0", borderTop: `1px solid ${C.rule}` }}>
+              <span>{h.date}</span>
+              <span className="flex items-center gap-2">HK${money(h.balance)}
+                <button className="pb-btn" aria-label={tr("刪除", "Delete")} onClick={() => up((s) => { s.mpf.history = (s.mpf.history || []).filter((z) => (z.id || z.date) !== (h.id || h.date)); })}
+                  style={{ background: "transparent", border: "none", color: C.red, fontSize: 12, padding: 0 }}>✕</button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ fontSize: 11, color: C.ink2, marginTop: 8, lineHeight: 1.5 }}>
+        {tr("eMPF 要密碼加短訊／電郵驗證碼或「智方便」登入，也沒有提供匯出或第三方接口，所以無法自動讀取。每季打開 eMPF App 抄一次總結餘就夠；超過 90 日未更新，「即將要處理」會提醒你。也可以把 eMPF 截圖發給 Claude 代填。",
+          "eMPF needs a password plus an SMS/email code, or iAM Smart, and offers no export or third-party access, so it can't be read automatically. Copying the total from the eMPF app once a quarter is enough; after 90 days without an update, Coming up reminds you. You can also send Claude an eMPF screenshot to fill it in.")}
+      </div>
+    </Card>
   );
 }
 
