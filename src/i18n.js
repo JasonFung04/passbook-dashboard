@@ -29,6 +29,7 @@ const zh = {
   "Goals": "目標",
   "Subscriptions": "訂閱",
   "Invest": "投資",
+  "FX": "匯率",
 
   // overview
   "Next manual re-deposit": "下一筆手動續存",

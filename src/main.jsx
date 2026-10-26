@@ -60,6 +60,16 @@ window.ibkrData = async () => {
   return { snapshot: snap.data || null, history: hist.data || [] };
 };
 
+// Read-only public data: bank deposit rates (refreshed weekly) and market FX (daily).
+window.marketData = async () => {
+  const since = new Date(Date.now() - 400 * 86400000).toISOString().slice(0, 10);
+  const [rates, fx] = await Promise.all([
+    supabase.from("market_rates").select("as_of, data").eq("id", "hk_td").maybeSingle(),
+    supabase.from("fx_rates").select("day, pair, close").gte("day", since).order("day").limit(2000),
+  ]);
+  return { rates: rates.data || null, fx: fx.data || [] };
+};
+
 class ErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { error: null }; }
   static getDerivedStateFromError(error) { return { error }; }
