@@ -16,6 +16,7 @@ const normalise = (state) => {
   state.snapshots ||= [];
   state.cash ||= { balance: 0, note: "" };
   state.debts ||= [];
+  state.subs ||= [];
   state.tx = (state.tx || []).map((item) => ({ ccy: "HKD", ...item }));
   state.income = (state.income || []).map((item) => ({ ccy: "HKD", ...item }));
   state.budget = (state.budget || []).map((item) => ({ ccy: "HKD", ...item }));

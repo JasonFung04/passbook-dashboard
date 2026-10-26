@@ -27,6 +27,7 @@ const zh = {
   "Month": "月度",
   "Plan": "計劃",
   "Goals": "目標",
+  "Subscriptions": "訂閱",
 
   // overview
   "Next manual re-deposit": "下一筆手動續存",
