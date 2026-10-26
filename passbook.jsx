@@ -80,6 +80,8 @@ const D = (bank, ccy, product, principal, rate, termMonths, startedDaysAgo, auto
   start: iso(new Date(Date.now() - startedDaysAgo * DAY)), autoRenew, note, closed: false,
 });
 
+// Blank starting sheet for brand-new accounts (and the Reset button).
+// Personal figures are never shipped with the app: each user enters their own.
 const SEED = {
   v: 5,
   settings: { rates: { USD: 7.8, CNY: 1.09 }, inflation: 2.5, investReturn: 6.5, emergencyMonths: 6 },
@@ -87,49 +89,13 @@ const SEED = {
   cash: { balance: 0, note: "" },
   debts: [],
   subs: [],
-  invest: { targetPct: 70, fundA: "SPYL", fundB: "IBTA", quarterly: 15000, months: [1, 4, 7, 10], janExtra: 0, done: {} },
+  invest: { targetPct: 70, fundA: "SPYL", fundB: "IBTA", quarterly: 0, months: [1, 4, 7, 10], janExtra: 0, done: {} },
   snapshots: [],
-  income: [{ id: uid(), source: "Monthly salary", amount: 18000, ccy: "HKD" }],
-  budget: [
-    { id: uid(), name: "Catering", group: "Living", amount: 3500, ccy: "HKD", note: "≈ HK$116 a day" },
-    { id: uid(), name: "Rent", group: "Living", amount: 4200, ccy: "HKD", note: "Basic rent" },
-    { id: uid(), name: "Subscriptions", group: "Living", amount: 200, ccy: "HKD", note: "iCloud, Apple Music" },
-    { id: uid(), name: "Utilities", group: "Living", amount: 100, ccy: "HKD", note: "Included in rent" },
-    { id: uid(), name: "Girlfriend", group: "People & learning", amount: 1800, ccy: "HKD", note: "Monthly" },
-    { id: uid(), name: "Social dining & transport", group: "People & learning", amount: 1200, ccy: "HKD", note: "" },
-    { id: uid(), name: "Books", group: "People & learning", amount: 300, ccy: "HKD", note: "" },
-    { id: uid(), name: "Courses", group: "People & learning", amount: 400, ccy: "HKD", note: "" },
-    { id: uid(), name: "Shenzhen trips", group: "People & learning", amount: 0, ccy: "HKD", note: "Set a monthly cap in HKD" },
-    { id: uid(), name: "General savings", group: "Savings", amount: 4500, ccy: "HKD", note: "Mox time deposit" },
-    { id: uid(), name: "Travel savings", group: "Savings", amount: 1800, ccy: "HKD", note: "Hang Seng" },
-  ],
-  tx: [
-    { id: uid(), date: "2025-07-01", name: "Living cost", kind: "expense", amount: 4500, ccy: "HKD", note: "" },
-    { id: uid(), date: "2025-07-07", name: "General savings", kind: "saving", amount: 4500, ccy: "HKD", note: "" },
-    { id: uid(), date: "2025-07-07", name: "Travel savings", kind: "saving", amount: 1800, ccy: "HKD", note: "" },
-    { id: uid(), date: "2025-07-07", name: "Master fee", kind: "expense", amount: 1800, ccy: "HKD", note: "" },
-    { id: uid(), date: "2025-07-14", name: "Driving licence", kind: "expense", amount: 510, ccy: "HKD", note: "" },
-    { id: uid(), date: "2025-09-01", name: "Driving lesson", kind: "expense", amount: 550, ccy: "HKD", note: "" },
-  ],
-  deposits: [
-    D("Mox", "HKD", "3-month", 3000, 3.2, 3, 96, false, "Ladder rung 1"),
-    D("Mox", "HKD", "3-month", 3000, 3.1, 3, 70, false, "Ladder rung 2"),
-    D("Mox", "HKD", "3-month", 3000, 3.05, 3, 60, false, "Ladder rung 3"),
-    D("Mox", "HKD", "3-month", 3000, 3.0, 3, 45, false, "Ladder rung 4"),
-    D("Mox", "HKD", "6-month", 3000, 2.95, 6, 150, false, ""),
-    D("Mox", "USD", "3-month", 400, 3.8, 3, 50, false, ""),
-    D("Mox", "USD", "6-month", 400, 3.75, 6, 120, false, ""),
-    D("Mox", "HKD", "1-month", 2000, 2.9, 1, 20, true, ""),
-    D("Mox", "HKD", "6-month", 2000, 3.0, 6, 30, false, ""),
-    D("Mox", "HKD", "12-month", 4000, 3.1, 12, 200, false, ""),
-    D("Hang Seng", "HKD", "6-month", 12000, 2.4, 6, 100, false, "Travel fund"),
-    D("BOCHK", "USD", "3-month", 1000, 3.9, 3, 30, false, "New fund rate"),
-  ],
-  goals: [
-    { id: uid(), name: "Contingency fund", target: 48000, current: 30000, deadline: "2026-12-31", monthly: 4500 },
-    { id: uid(), name: "Parents' phone", target: 8700, current: 0, deadline: "2026-11-10", monthly: 1000 },
-    { id: uid(), name: "Driving licence", target: 10000, current: 0, deadline: "2027-01-01", monthly: 2000 },
-  ],
+  income: [],
+  budget: [],
+  tx: [],
+  deposits: [],
+  goals: [],
 };
 
 /* ── storage ─────────────────────────────────────────────────── */
@@ -297,7 +263,7 @@ function subInfo(x, rates) {
 /* ── investment maths (IBKR snapshot + buy plan) ─────────────── */
 // The snapshot is written once a day by a server-side sync from IBKR;
 // the browser only reads it. `plan` is the user's own buy schedule.
-const INVEST_DEFAULT = { targetPct: 70, fundA: "SPYL", fundB: "IBTA", quarterly: 15000, months: [1, 4, 7, 10], janExtra: 0, done: {} };
+const INVEST_DEFAULT = { targetPct: 70, fundA: "SPYL", fundB: "IBTA", quarterly: 0, months: [1, 4, 7, 10], janExtra: 0, done: {} };
 const BUY_SOON_DAYS = 7;
 const limitPrice = (p) => Math.ceil(n(p) * 1.003 * 100) / 100;
 
