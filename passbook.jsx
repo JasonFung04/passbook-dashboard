@@ -516,6 +516,8 @@ const fxMidOn = (fx, date, ccy) => {
 /* ── QUICK ENTRY: log one spend in a few taps ────────────────── */
 // Everyday categories, one tap each. [Chinese, English]
 const QUICK_PRESETS = [["交通", "Transport"], ["超市", "Groceries"], ["午餐", "Lunch"], ["八達通", "Octopus top-up"]];
+// Which budget line each quick pick belongs to (lunch and groceries are Catering, rides and Octopus are transport).
+const QUICK_HOME = [/transport|交通/i, /catering|餐飲|飲食|grocer|food/i, /catering|餐飲|飲食|grocer|food/i, /transport|交通/i];
 const CAT_EMOJI = [
   [/八達通|octopus/i, "💳"], [/交通|transport|mtr|taxi|uber/i, "🚇"], [/超市|grocer|supermarket/i, "🛒"],
   [/午餐|晚餐|早餐|餐|lunch|dinner|breakfast|food|catering|dining/i, "🍜"], [/rent|租/i, "🏠"],
@@ -537,9 +539,11 @@ function QuickEntry({ st, up, lang, onClose, onSaved }) {
     border: "none", borderRadius: 999, padding: "8px 13px", fontSize: 14, fontWeight: 700, cursor: "pointer", minHeight: 38, whiteSpace: "nowrap", flexShrink: 0,
     background: sel ? (tone || C.jade) : C.chip, color: sel ? C.onJade : C.ink,
   });
-  // Hide a preset if a budget line already has its name, so it isn't shown twice.
+  // With no budget lines yet (a fresh account) the quick picks act as categories. Otherwise they
+  // are tags that fill in the item and jump to the budget line they belong to.
   const presets = QUICK_PRESETS.map(([zh, en], i) => ({ key: "x:" + i, zh, en, label: tr(zh, en) }))
-    .filter((p) => !st.budget.some((b) => [p.zh, p.en].includes((b.name || "").trim())));
+    .filter(() => st.budget.length === 0);
+  const homeOf = (i) => st.budget.find((b) => QUICK_HOME[i].test(b.name || ""));
   const save = () => {
     if (!n(amount)) { setErr(tr("請輸入金額", "Enter an amount")); return; }
     if (!cat) { setErr(tr("揀一個分類", "Pick a category")); return; }
@@ -595,7 +599,20 @@ function QuickEntry({ st, up, lang, onClose, onSaved }) {
           ))}
         </div>
         {st.budget.length === 0 && st.plans.length === 0 && (
-          <div style={{ fontSize: 12, color: C.ink2, marginTop: 6 }}>{tr("還沒有分類。可以先用「突然購買」，或到計劃頁加分類。", "No categories yet. Use Sudden for now, or add categories on the Plan tab.")}</div>
+          <div style={{ fontSize: 12, color: C.ink2, marginTop: 6 }}>{tr("想要自己的分類（例如 Catering、Rent），可以到計劃頁新增。", "Want your own categories, like Catering or Rent? Add them on the Plan tab.")}</div>
+        )}
+        {st.budget.length > 0 && (
+          <div className="flex flex-wrap gap-2 mt-3 items-center">
+            <span style={{ fontSize: 12.5, color: C.ink2 }}>{tr("常用", "Quick picks")}</span>
+            {QUICK_PRESETS.map(([zh, en], i) => {
+              const label = tr(zh, en);
+              return (
+                <button key={zh} className="pb-tab"
+                  onClick={() => { setItem(label); setErr(""); const h = homeOf(i); if (!cat && h) setCat("b:" + h.id); }}
+                  style={{ ...chip(item === label), minHeight: 32, padding: "5px 11px", fontSize: 13 }}>{catEmoji(label)} {label}</button>
+              );
+            })}
+          </div>
         )}
         <input className="pb-in mt-3" style={{ width: "100%" }} placeholder={tr("買咗咩？（例如 Philips 牙刷 ×4）", "What was it? (e.g. Philips toothbrush x4)")} value={item} onChange={(e) => setItem(e.target.value)} />
         <div className="flex gap-2 mt-2 items-center">
@@ -1680,7 +1697,7 @@ function Month({ st, d, up, lang }) {
           </select>
         </div>
         <input className="pb-in mt-2" style={{ width: "100%" }} list="cats" placeholder={L("Category")} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
-        <datalist id="cats">{[...QUICK_PRESETS.map(([zh, en]) => tr(zh, en)), ...st.budget.map((b) => b.name)].map((v) => <option key={v} value={v} />)}</datalist>
+        <datalist id="cats">{[...(st.budget.length ? [] : QUICK_PRESETS.map(([zh, en]) => tr(zh, en))), ...st.budget.map((b) => b.name)].map((v) => <option key={v} value={v} />)}</datalist>
         {f.kind === "expense" && (
           <select className="pb-in mt-2" style={{ width: "100%" }} value={f.link} onChange={(e) => setF({ ...f, link: e.target.value })}>
             <option value="">{tr("計入預算分類", "Counts against a budget line")}</option>
