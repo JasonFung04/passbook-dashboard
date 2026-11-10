@@ -67,7 +67,16 @@ Every user-visible feature, interface, deployment, or security change must updat
 - Removed or caveated several Grow-tab claims that were stated as fact without any way for the app to verify them: an unsourced "current" HKD/USD market-rate range in the yield explanation (removed — only your own computed blended yield and real return remain), a tax-bracket assumption hardcoded to the original sample income regardless of your actual income (removed — now points you to check your own bracket), and the deposit-protection limit and fund-tax figures (kept, since they're stable published rules, but now explicitly flagged as reference figures to confirm yourself rather than live-verified data).
 - Removed a leftover example dollar figure ("a HK$550 driving lesson") from step 1's copy — it was the original sample seed data's own transaction amount, hardcoded into the general advice text as if it applied to everyone.
 - Added liquid-cash and debt tracking, so steps 1 (current-account cushion) and 3 (high-interest debt) on the Grow tab are now genuinely computed and verified instead of an unverifiable placeholder. Both feed into net worth as well (cash added, debt subtracted).
+- Added a Subscriptions tab (plans, contracts, warranties with renewal dates) and per-deposit maturity instructions.
+- Added an Invest tab: IBKR holdings synced daily from a server-side job, return tracking, quarterly buy reminders, and an MPF section with balance history.
+- Added a best-deposit-rates card (weekly public data) and an FX tab (daily market rates).
+- Added take-home pay after the employee's 5% MPF, expected and logged overtime hours, a leave calendar with Hong Kong public holidays and trips, and a Health tab (weight, BMI, workouts, coach plan).
+- Redesigned for phones: bottom tab bar with a More sheet, dark mode following the system setting, hero net-worth card, quick-entry sheet (+ button), spending trends, and editable/deletable ledger entries. New accounts start blank instead of with sample data.
 - Income rows can now carry an optional start and end date (Plan tab), so a pay rise can be entered ahead of time: take-home keeps using the current salary until the new row's start date, upcoming rows show a "from …" chip, and a preview line shows what take-home will be from that date.
+- Removed the "Erase all data" button from the More sheet: on a cloud-synced app holding real figures, a one-tap reset to sample data was a liability.
+- Removed the "Sudden & planned spending" card from the Plan tab. The monthly sudden-purchase allowance it held is now an ordinary Living budget line (migrated automatically), so it is visible and editable alongside every other amount; the "planned spends" concept is gone (Goals already covers large future items).
+- The Grow tab now reacts to a scheduled pay rise: a "Raise ahead" card shows the new take-home and the monthly difference, recommends where that difference should go following the same priority order as the steps, and the savings-rate check and levers use the confirmed raise instead of a hypothetical one.
+- Fixed the currency selector shrinking to "HK" inside tight rows, and dropped the never-read `snapshots` field.
 
 ## Security notes
 

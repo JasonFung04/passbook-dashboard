@@ -13,7 +13,6 @@ const normalise = (state) => {
   state.settings.rates ||= { USD: 7.8, CNY: 1.09 };
   state.settings.rates.USD ||= 7.8;
   state.settings.rates.CNY ||= 1.09;
-  state.snapshots ||= [];
   state.cash ||= { balance: 0, note: "" };
   state.debts ||= [];
   state.subs ||= [];

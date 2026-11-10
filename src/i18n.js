@@ -15,8 +15,6 @@ const zh = {
   "net worth": "淨資產",
   "Synced to your account in the cloud. Rules of thumb, not licensed advice.":
     "資料已同步至你的雲端帳戶。以下內容僅供參考，並非持牌意見。",
-  "Reset": "重設",
-  "Reset every figure back to the starting sheet?": "要把所有數字重設回初始範本嗎？",
   "Saved": "已儲存",
   "Not saved — storage unavailable": "未能儲存 — 儲存服務不可用",
 
