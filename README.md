@@ -67,6 +67,7 @@ Every user-visible feature, interface, deployment, or security change must updat
 - Removed or caveated several Grow-tab claims that were stated as fact without any way for the app to verify them: an unsourced "current" HKD/USD market-rate range in the yield explanation (removed — only your own computed blended yield and real return remain), a tax-bracket assumption hardcoded to the original sample income regardless of your actual income (removed — now points you to check your own bracket), and the deposit-protection limit and fund-tax figures (kept, since they're stable published rules, but now explicitly flagged as reference figures to confirm yourself rather than live-verified data).
 - Removed a leftover example dollar figure ("a HK$550 driving lesson") from step 1's copy — it was the original sample seed data's own transaction amount, hardcoded into the general advice text as if it applied to everyone.
 - Added liquid-cash and debt tracking, so steps 1 (current-account cushion) and 3 (high-interest debt) on the Grow tab are now genuinely computed and verified instead of an unverifiable placeholder. Both feed into net worth as well (cash added, debt subtracted).
+- Income rows can now carry an optional start and end date (Plan tab), so a pay rise can be entered ahead of time: take-home keeps using the current salary until the new row's start date, upcoming rows show a "from …" chip, and a preview line shows what take-home will be from that date.
 
 ## Security notes
 
