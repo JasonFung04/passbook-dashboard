@@ -354,9 +354,13 @@ function investInfo(planIn, ibkr, rates) {
 // Mandatory employee MPF: 5% of relevant income (salary + OT), nothing
 // below HK$7,100 a month, capped at HK$1,500 (relevant income HK$30,000).
 const mpfEE = (relevant) => (n(relevant) < 7100 ? 0 : Math.min(n(relevant) * 0.05, 1500));
-function payInfo(st, rates, otHours = 0) {
-  const gross = st.income.reduce((a, b) => a + toHKD(b.amount, b.ccy || "HKD", rates), 0);
-  const relevant = st.income.filter((b) => b.mpf).reduce((a, b) => a + toHKD(b.amount, b.ccy || "HKD", rates), 0);
+// An income row counts on a given day only inside its optional from/until window,
+// so a pay rise can be entered ahead of time without changing this month's figures.
+const incomeActiveOn = (r, day) => (!r.from || r.from <= day) && (!r.until || r.until >= day);
+function payInfo(st, rates, otHours = 0, day = isoLocal(new Date())) {
+  const rows = st.income.filter((r) => incomeActiveOn(r, day));
+  const gross = rows.reduce((a, b) => a + toHKD(b.amount, b.ccy || "HKD", rates), 0);
+  const relevant = rows.filter((b) => b.mpf).reduce((a, b) => a + toHKD(b.amount, b.ccy || "HKD", rates), 0);
   const otRate = n(st.settings.otRate) || 45;
   const ot = n(otHours) * otRate;
   const mpf = mpfEE(relevant + ot);
@@ -1996,21 +2000,45 @@ function Plan({ st, d, up, lang }) {
     <div className="space-y-4">
       <Card>
         <Eyebrow>{L("Money in each month")}</Eyebrow>
-        {st.income.map((r, i) => (
-          <div key={r.id} className="mt-2 pb-row" style={{ paddingBottom: 10 }}>
-            <TextIn value={r.source} onChange={(v) => up((s) => { s.income[i].source = v; })} placeholder={L("Source")} />
+        {st.income.map((r, i) => {
+          const today = todayISO();
+          const upcoming = r.from && r.from > today, ended = r.until && r.until < today;
+          return (
+          <div key={r.id} className="mt-2 pb-row" style={{ paddingBottom: 10, opacity: ended ? 0.55 : 1 }}>
+            <div className="flex gap-2 items-center">
+              <TextIn value={r.source} onChange={(v) => up((s) => { s.income[i].source = v; })} placeholder={L("Source")} />
+              {upcoming && <Chip tone="blue">{tr(`${fmtShort(r.from, lang)} 起`, `from ${fmtShort(r.from, lang)}`)}</Chip>}
+              {ended && <Chip tone="grey">{tr("已結束", "Ended")}</Chip>}
+            </div>
             <div className="flex gap-2 mt-2 items-center">
               <TextIn type="number" right value={r.amount} onChange={(v) => up((s) => { s.income[i].amount = v; })} />
               <CcySelect value={r.ccy} onChange={(v) => up((s) => { s.income[i].ccy = v; })} />
               <RemoveBtn onClick={() => up((s) => { s.income.splice(i, 1); })} label={L("Delete")} />
+            </div>
+            <div className="grid gap-2 mt-2" style={{ gridTemplateColumns: "1fr 1fr" }}>
+              <Lbl t={tr("生效日期（可留空）", "Starts (optional)")}><TextIn type="date" value={r.from || ""} onChange={(v) => up((s) => { s.income[i].from = v || undefined; })} /></Lbl>
+              <Lbl t={tr("截至（可留空）", "Ends (optional)")}><TextIn type="date" value={r.until || ""} onChange={(v) => up((s) => { s.income[i].until = v || undefined; })} /></Lbl>
             </div>
             <label className="flex items-center gap-2 mt-2" style={{ fontSize: 13, color: C.ink2, cursor: "pointer" }}>
               <input type="checkbox" checked={!!r.mpf} onChange={(e) => up((s) => { s.income[i].mpf = e.target.checked; })} style={{ width: 18, height: 18 }} />
               {lang === "zh" ? "未扣強積金的薪金（自動扣 5%）" : "Before MPF (deduct 5% automatically)"}
             </label>
           </div>
-        ))}
+          );
+        })}
         <Btn size="sm" onClick={() => up((s) => { s.income.push({ id: uid(), source: "", amount: 0, ccy: "HKD", mpf: false }); })}>{L("+ Add income")}</Btn>
+        {(() => {
+          const today = todayISO();
+          const nextFrom = st.income.map((r) => r.from).filter((f) => f && f > today).sort()[0];
+          if (!nextFrom) return null;
+          const next = payInfo(st, rates, n(st.settings.otPlanHours), nextFrom);
+          return (
+            <div className="mt-3" style={{ fontSize: 13, color: C.ink, background: C.blueSoft, borderRadius: 12, padding: "8px 12px" }}>
+              {tr(<>由 <b>{fmtDate(nextFrom, lang)}</b> 起：總收入 {hk(next.gross)}，每月實收約 <b>{hk(next.net)}</b>（已扣強積金）。</>,
+                <>From <b>{fmtDate(nextFrom, lang)}</b>: gross {hk(next.gross)}, take-home about <b>{hk(next.net)}</b> after MPF.</>)}
+            </div>
+          );
+        })()}
         <table style={{ width: "100%", marginTop: 12, fontSize: 13.5 }}>
           <tbody>
             <tr className="pb-row"><td style={{ padding: "5px 0", color: C.ink2 }}>{lang === "zh" ? "總收入" : "Gross"}</td><td style={{ textAlign: "right" }}><Num value={hk(d.pay.gross, 2)} weight={600} /></td></tr>
